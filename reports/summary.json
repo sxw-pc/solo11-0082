@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "batch": {
+    "id": "b_6db3b1425d1f_915981533aed",
+    "status": "completed",
+    "started_at": "2026-11-15T02:03:59Z",
+    "finished_at": "2026-11-15T02:04:03Z",
+    "total_lines": 19,
+    "processed_lines": 19,
+    "replay_file": "replay_demo.jsonl",
+    "replay_sha256": "6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa",
+    "contract_file": "points.yaml",
+    "contract_sha256": "915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326"
+  },
+  "totals": {
+    "frames": 19,
+    "readings": 11,
+    "valid_readings": 8,
+    "issues": 12,
+    "pending_points": 7
+  },
+  "quality_code_distribution": {
+    "good": 8,
+    "bad_frame": 3,
+    "bad_crc_request": 1,
+    "bad_crc_response": 1,
+    "exception_response": 1,
+    "no_contract": 1,
+    "missing_response": 1,
+    "duplicate": 1,
+    "overflow": 1,
+    "under_range": 1,
+    "not_in_enum": 1
+  },
+  "issue_distribution": {
+    "bad_crc_request": 1,
+    "bad_crc_response": 1,
+    "byte_count_mismatch": 1,
+    "duplicate": 1,
+    "exception_response": 1,
+    "missing_response": 1,
+    "no_contract": 1,
+    "not_in_enum": 1,
+    "overflow": 1,
+    "slave_mismatch": 1,
+    "truncated_frame": 1,
+    "under_range": 1
+  },
+  "devices": [
+    {
+      "device_id": "demo-gateway",
+      "label": "Demo Gateway (synthetic line A controller)",
+      "reading_count": 7,
+      "good_count": 4,
+      "issue_count": 6,
+      "pending_count": 2
+    },
+    {
+      "device_id": "line-a",
+      "label": "Line A synthetic remote I/O",
+      "reading_count": 4,
+      "good_count": 4,
+      "issue_count": 5,
+      "pending_count": 5
+    }
+  ],
+  "points": [
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_flow",
+      "unit": "m3/h",
+      "data_type": "float32",
+      "reading_count": 1,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": true
+    },
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_mode",
+      "unit": "",
+      "data_type": "uint16",
+      "reading_count": 2,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": false
+    },
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_speed",
+      "unit": "rpm",
+      "data_type": "uint32",
+      "reading_count": 2,
+      "good_count": 1,
+      "issue_count": 3,
+      "pending": true
+    },
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_temperature",
+      "unit": "degC",
+      "data_type": "int16",
+      "reading_count": 2,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": false
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_energy",
+      "unit": "kWh",
+      "data_type": "uint32",
+      "reading_count": 0,
+      "good_count": 0,
+      "issue_count": 1,
+      "pending": true
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_level",
+      "unit": "m",
+      "data_type": "int32",
+      "reading_count": 1,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": true
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_pressure",
+      "unit": "kPa",
+      "data_type": "uint16",
+      "reading_count": 1,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": true
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_status",
+      "unit": "",
+      "data_type": "uint16",
+      "reading_count": 1,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": true
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_voltage",
+      "unit": "V",
+      "data_type": "uint32",
+      "reading_count": 1,
+      "good_count": 1,
+      "issue_count": 1,
+      "pending": true
+    }
+  ],
+  "pending_recollect": [
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_flow",
+      "issue_code": "exception_response",
+      "quality_code": "exception_response",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        12
+      ],
+      "detail": "exception code 2: illegal data address"
+    },
+    {
+      "device_id": "demo-gateway",
+      "point_key": "line_a_speed",
+      "issue_code": "slave_mismatch",
+      "quality_code": "bad_frame",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        18
+      ],
+      "detail": "response slave 9 != request slave 1"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_energy",
+      "issue_code": "missing_response",
+      "quality_code": "missing_response",
+      "severity": "warning",
+      "occurrences": 1,
+      "line_numbers": [],
+      "detail": "contract point has no request/response in this replay"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_level",
+      "issue_code": "truncated_frame",
+      "quality_code": "bad_frame",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        16
+      ],
+      "detail": "response: response declares 4 data bytes but frame is 6 bytes"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_pressure",
+      "issue_code": "bad_crc_request",
+      "quality_code": "bad_crc_request",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        14
+      ],
+      "detail": "request CRC check failed"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_status",
+      "issue_code": "byte_count_mismatch",
+      "quality_code": "bad_frame",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        17
+      ],
+      "detail": "response byte count 4 != expected 2"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_voltage",
+      "issue_code": "bad_crc_response",
+      "quality_code": "bad_crc_response",
+      "severity": "error",
+      "occurrences": 1,
+      "line_numbers": [
+        13
+      ],
+      "detail": "response CRC check failed"
+    }
+  ]
+}

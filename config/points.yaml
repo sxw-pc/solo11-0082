@@ -1,0 +1,123 @@
+version: 1
+devices:
+  - id: demo-gateway
+    label: Demo Gateway (synthetic line A controller)
+    points:
+      - key: line_a_speed
+        slave_id: 1
+        function: 3
+        start: 0
+        count: 2
+        data_type: uint32
+        byte_order: ABCD
+        scale: 0.1
+        offset: 0
+        unit: rpm
+        range: [0, 3000]
+        description: Synthetic line A drive speed.
+      - key: line_a_temperature
+        slave_id: 1
+        function: 3
+        start: 2
+        count: 1
+        data_type: int16
+        byte_order: AB
+        scale: 0.1
+        offset: 0
+        unit: degC
+        range: [-40, 150]
+        description: Synthetic bearing temperature.
+      - key: line_a_mode
+        slave_id: 1
+        function: 3
+        start: 3
+        count: 1
+        data_type: uint16
+        byte_order: AB
+        scale: 1
+        offset: 0
+        unit: ""
+        range: [0, 10]
+        enum:
+          0: idle
+          1: run
+          2: fault
+        description: Synthetic operating mode.
+      - key: line_a_flow
+        slave_id: 1
+        function: 4
+        start: 10
+        count: 2
+        data_type: float32
+        byte_order: CDAB
+        scale: 1
+        offset: 0
+        unit: m3/h
+        range: [0, 500]
+        description: Synthetic input flow.
+  - id: line-a
+    label: Line A synthetic remote I/O
+    points:
+      - key: line_a_level
+        slave_id: 2
+        function: 3
+        start: 20
+        count: 2
+        data_type: int32
+        byte_order: BADC
+        scale: 0.01
+        offset: 1.5
+        unit: m
+        range: [0, 20]
+        description: Synthetic tank level.
+      - key: line_a_voltage
+        slave_id: 2
+        function: 3
+        start: 24
+        count: 2
+        data_type: uint32
+        byte_order: DCBA
+        scale: 0.001
+        offset: 0
+        unit: V
+        range: [0, 400]
+        description: Synthetic bus voltage.
+      - key: line_a_pressure
+        slave_id: 2
+        function: 4
+        start: 30
+        count: 1
+        data_type: uint16
+        byte_order: BA
+        scale: 0.01
+        offset: 0
+        unit: kPa
+        range: [0, 1000]
+        description: Synthetic discharge pressure.
+      - key: line_a_status
+        slave_id: 2
+        function: 3
+        start: 32
+        count: 1
+        data_type: uint16
+        byte_order: AB
+        scale: 1
+        offset: 0
+        unit: ""
+        range: [0, 10]
+        enum:
+          0: idle
+          1: running
+        description: Synthetic remote I/O status.
+      - key: line_a_energy
+        slave_id: 2
+        function: 3
+        start: 40
+        count: 2
+        data_type: uint32
+        byte_order: ABCD
+        scale: 1
+        offset: 0
+        unit: kWh
+        range: [0, 1000000]
+        description: Deliberately absent from the demo replay.

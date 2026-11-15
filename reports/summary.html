@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点位采录台采集报告 · b_6db3b1425d1f_915981533aed</title>
+<style>
+:root { color-scheme: light; --ink:#17202a; --muted:#5d6d7e; --line:#d5dde5;
+        --paper:#f7f9fb; --card:#ffffff; --accent:#1f5f8b; --warn:#8a5a00;
+        --bad:#9b2c2c; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--paper); color:var(--ink);
+       font:15px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif; }
+main { max-width:1180px; margin:0 auto; padding:28px 20px 56px; }
+header { border-bottom:3px solid var(--accent); padding-bottom:16px; margin-bottom:22px; }
+h1 { font-size:27px; margin:0 0 6px; letter-spacing:.02em; }
+h2 { font-size:19px; margin:28px 0 10px; color:var(--accent); }
+p.lead { color:var(--muted); margin:0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:12px; margin:14px 0; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px;
+        padding:13px 15px; }
+.card .label { color:var(--muted); font-size:12px; text-transform:uppercase;
+               letter-spacing:.05em; }
+.card .value { font-size:24px; font-weight:650; margin-top:3px; }
+table { width:100%; border-collapse:collapse; background:var(--card);
+        border:1px solid var(--line); font-size:14px; }
+th, td { border-bottom:1px solid var(--line); padding:8px 10px;
+         text-align:left; vertical-align:top; }
+th { background:#eef3f7; font-weight:650; }
+tr:last-child td { border-bottom:0; }
+code, .mono { font-family:Consolas, "Courier New", monospace; font-size:12px;
+              overflow-wrap:anywhere; }
+.note { background:#fff8e6; border:1px solid #ead9a5; padding:10px 12px;
+        border-radius:7px; color:var(--warn); }
+.sev-error { color:var(--bad); font-weight:650; }
+.sev-warning { color:var(--warn); font-weight:650; }
+.sev-info { color:var(--accent); font-weight:650; }
+footer { color:var(--muted); border-top:1px solid var(--line); margin-top:30px;
+         padding-top:12px; font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>点位采录台采集报告</h1>
+<p class="lead">离线回放采集台账 · 批次 <span class="mono">b_6db3b1425d1f_915981533aed</span></p>
+</header>
+
+<section>
+<h2>批次信息</h2>
+<table><tbody>
+<tr><th>状态</th><td>completed</td></tr>
+<tr><th>开始时间</th><td>2026-11-15T02:03:59Z</td></tr>
+<tr><th>结束时间</th><td>2026-11-15T02:04:03Z</td></tr>
+<tr><th>回放文件</th><td>replay_demo.jsonl</td></tr>
+<tr><th>回放 SHA-256</th><td class="mono">6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa</td></tr>
+<tr><th>点位契约</th><td>points.yaml</td></tr>
+<tr><th>契约 SHA-256</th><td class="mono">915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326</td></tr>
+<tr><th>回放总行数 / 已处理</th><td>19 / 19</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>概览</h2>
+<div class="grid">
+<div class="card"><div class="label">帧记录</div><div class="value">19</div></div>
+<div class="card"><div class="label">读数记录</div><div class="value">11</div></div>
+<div class="card"><div class="label">有效读数 good</div><div class="value">8</div></div>
+<div class="card"><div class="label">问题记录</div><div class="value">12</div></div>
+<div class="card"><div class="label">待重采点位</div><div class="value">7</div></div>
+</div>
+</section>
+
+<section>
+<h2>质量码分布</h2>
+<table><thead><tr><th>质量码</th><th>严重级别</th><th>进入待重采</th><th>数量</th></tr></thead><tbody><tr><td><code>good</code></td><td><span class="sev-info">info</span></td><td>否</td><td>8</td></tr><tr><td><code>bad_frame</code></td><td><span class="sev-error">error</span></td><td>是</td><td>3</td></tr><tr><td><code>bad_crc_request</code></td><td><span class="sev-error">error</span></td><td>是</td><td>1</td></tr><tr><td><code>bad_crc_response</code></td><td><span class="sev-error">error</span></td><td>是</td><td>1</td></tr><tr><td><code>exception_response</code></td><td><span class="sev-error">error</span></td><td>是</td><td>1</td></tr><tr><td><code>no_contract</code></td><td><span class="sev-warning">warning</span></td><td>否</td><td>1</td></tr><tr><td><code>missing_response</code></td><td><span class="sev-warning">warning</span></td><td>是</td><td>1</td></tr><tr><td><code>duplicate</code></td><td><span class="sev-warning">warning</span></td><td>否</td><td>1</td></tr><tr><td><code>overflow</code></td><td><span class="sev-warning">warning</span></td><td>否</td><td>1</td></tr><tr><td><code>under_range</code></td><td><span class="sev-warning">warning</span></td><td>否</td><td>1</td></tr><tr><td><code>not_in_enum</code></td><td><span class="sev-warning">warning</span></td><td>否</td><td>1</td></tr></tbody></table>
+</section>
+
+<section>
+<h2>问题分布</h2>
+<table><thead><tr><th>问题码</th><th>数量</th></tr></thead><tbody><tr><td><code>bad_crc_request</code></td><td>1</td></tr><tr><td><code>bad_crc_response</code></td><td>1</td></tr><tr><td><code>byte_count_mismatch</code></td><td>1</td></tr><tr><td><code>duplicate</code></td><td>1</td></tr><tr><td><code>exception_response</code></td><td>1</td></tr><tr><td><code>missing_response</code></td><td>1</td></tr><tr><td><code>no_contract</code></td><td>1</td></tr><tr><td><code>not_in_enum</code></td><td>1</td></tr><tr><td><code>overflow</code></td><td>1</td></tr><tr><td><code>slave_mismatch</code></td><td>1</td></tr><tr><td><code>truncated_frame</code></td><td>1</td></tr><tr><td><code>under_range</code></td><td>1</td></tr></tbody></table>
+</section>
+
+<section>
+<h2>按设备统计</h2>
+<table><thead><tr><th>设备</th><th>读数</th><th>good</th><th>问题</th><th>待重采</th></tr></thead><tbody><tr><td>demo-gateway</td><td>7</td><td>4</td><td>6</td><td>2</td></tr><tr><td>line-a</td><td>4</td><td>4</td><td>5</td><td>5</td></tr></tbody></table>
+</section>
+
+<section>
+<h2>按点位统计</h2>
+<table><thead><tr><th>设备</th><th>点位</th><th>单位</th><th>读数</th><th>good</th><th>问题</th><th>待重采</th></tr></thead><tbody><tr><td><code>demo-gateway</code></td><td><code>line_a_flow</code></td><td>m3/h</td><td>1</td><td>1</td><td>1</td><td>是</td></tr><tr><td><code>demo-gateway</code></td><td><code>line_a_mode</code></td><td>-</td><td>2</td><td>1</td><td>1</td><td>否</td></tr><tr><td><code>demo-gateway</code></td><td><code>line_a_speed</code></td><td>rpm</td><td>2</td><td>1</td><td>3</td><td>是</td></tr><tr><td><code>demo-gateway</code></td><td><code>line_a_temperature</code></td><td>degC</td><td>2</td><td>1</td><td>1</td><td>否</td></tr><tr><td><code>line-a</code></td><td><code>line_a_energy</code></td><td>kWh</td><td>0</td><td>0</td><td>1</td><td>是</td></tr><tr><td><code>line-a</code></td><td><code>line_a_level</code></td><td>m</td><td>1</td><td>1</td><td>1</td><td>是</td></tr><tr><td><code>line-a</code></td><td><code>line_a_pressure</code></td><td>kPa</td><td>1</td><td>1</td><td>1</td><td>是</td></tr><tr><td><code>line-a</code></td><td><code>line_a_status</code></td><td>-</td><td>1</td><td>1</td><td>1</td><td>是</td></tr><tr><td><code>line-a</code></td><td><code>line_a_voltage</code></td><td>V</td><td>1</td><td>1</td><td>1</td><td>是</td></tr></tbody></table>
+</section>
+
+<section>
+<h2>待重采点位</h2>
+<p class="note">存在待重采点位，请按 CSV 清单安排回放补采。</p>
+<table><thead><tr><th>设备</th><th>点位</th><th>问题码</th><th>质量码</th><th>次数</th><th>行号</th><th>说明</th></tr></thead><tbody><tr><td><code>demo-gateway</code></td><td><code>line_a_flow</code></td><td><code>exception_response</code></td><td><code>exception_response</code></td><td>1</td><td>12</td><td>exception code 2: illegal data address</td></tr><tr><td><code>demo-gateway</code></td><td><code>line_a_speed</code></td><td><code>slave_mismatch</code></td><td><code>bad_frame</code></td><td>1</td><td>18</td><td>response slave 9 != request slave 1</td></tr><tr><td><code>line-a</code></td><td><code>line_a_energy</code></td><td><code>missing_response</code></td><td><code>missing_response</code></td><td>1</td><td>-</td><td>contract point has no request/response in this replay</td></tr><tr><td><code>line-a</code></td><td><code>line_a_level</code></td><td><code>truncated_frame</code></td><td><code>bad_frame</code></td><td>1</td><td>16</td><td>response: response declares 4 data bytes but frame is 6 bytes</td></tr><tr><td><code>line-a</code></td><td><code>line_a_pressure</code></td><td><code>bad_crc_request</code></td><td><code>bad_crc_request</code></td><td>1</td><td>14</td><td>request CRC check failed</td></tr><tr><td><code>line-a</code></td><td><code>line_a_status</code></td><td><code>byte_count_mismatch</code></td><td><code>bad_frame</code></td><td>1</td><td>17</td><td>response byte count 4 != expected 2</td></tr><tr><td><code>line-a</code></td><td><code>line_a_voltage</code></td><td><code>bad_crc_response</code></td><td><code>bad_crc_response</code></td><td>1</td><td>13</td><td>response CRC check failed</td></tr></tbody></table>
+</section>
+
+<footer>
+本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。
+所有帧、设备名、点位与时间戳均为合成 fixture。
+</footer>
+</main>
+</body>
+</html>

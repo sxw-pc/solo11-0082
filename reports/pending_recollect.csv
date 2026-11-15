@@ -1,0 +1,8 @@
+device_id,point_key,issue_code,quality_code,severity,occurrences,line_numbers,detail
+demo-gateway,line_a_flow,exception_response,exception_response,error,1,12,exception code 2: illegal data address
+demo-gateway,line_a_speed,slave_mismatch,bad_frame,error,1,18,response slave 9 != request slave 1
+line-a,line_a_energy,missing_response,missing_response,warning,1,,contract point has no request/response in this replay
+line-a,line_a_level,truncated_frame,bad_frame,error,1,16,response: response declares 4 data bytes but frame is 6 bytes
+line-a,line_a_pressure,bad_crc_request,bad_crc_request,error,1,14,request CRC check failed
+line-a,line_a_status,byte_count_mismatch,bad_frame,error,1,17,response byte count 4 != expected 2
+line-a,line_a_voltage,bad_crc_response,bad_crc_response,error,1,13,response CRC check failed
