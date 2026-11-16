@@ -77,6 +77,7 @@ def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
     quality = summary["quality_code_distribution"]
+    interlock = summary["interlock"]
     quality_rows = []
     for code, count in quality.items():
         meta = quality_meta(code)
@@ -168,6 +169,8 @@ def render_html(summary: dict[str, Any]) -> str:
 {_table(['问题码', '数量'], issue_rows)}
 </section>
 
+{_render_interlock_html(interlock, summary['interlock_pending_recollect'])}
+
 <section>
 <h2>按设备统计</h2>
 {_table(['设备', '读数', 'good', '问题', '待重采'], device_rows)}
@@ -191,4 +194,74 @@ def render_html(summary: dict[str, Any]) -> str:
 </main>
 </body>
 </html>
+"""
+
+
+def _render_interlock_html(
+    interlock: dict[str, Any], unknown_pending: list[dict[str, Any]]
+) -> str:
+    rules = interlock["rules"]
+    if not rules:
+        return (
+            "<section><h2>双点位持续联锁</h2>"
+            "<p>本批次契约未声明双点位联锁规则。</p></section>"
+        )
+    rule_rows = [
+        [
+            f"<code>{_e(item['rule_id'])}@v{_e(item['version'])}</code>",
+            f"<code>{_e(item['device_id'])}</code>",
+            _e(item["sampling"]),
+            _e(" AND ".join(
+                f"{point['point_key']} "
+                f"{'>' if point['direction'] == 'above' else '<'}"
+                f"{'=' if point['inclusive'] else ''} {point['threshold']:g}"
+                for point in item["points"]
+            )),
+            _e(item["min_duration_minutes"]), _e(item["max_stale_minutes"]),
+            _e(item["totals"]["proven_interlock_seconds"]),
+            _e(item["totals"]["proven_normal_seconds"]),
+            _e(item["totals"]["unknown_seconds"]),
+            _e(item["totals"]["event_count"]),
+        ]
+        for item in rules
+    ]
+    event_rows = [
+        [f"<code>{_e(item['rule_id'])}</code>",
+         _e(item["start_ts"]), _e(item["end_ts"]), _e(item["duration_seconds"]),
+         _e(item["peak_a"]), _e(item["peak_b"]),
+         _e(",".join(str(number) for number in item["line_numbers"]) or "-"),
+         f"<code>{_e(item['interruption_reason'])}</code>",
+         _e(",".join(str(number) for number in item["interruption_lines"]) or "-")]
+        for rule in rules for item in rule["events"]
+    ]
+    unknown_rows = [
+        [f"<code>{_e(item['rule_id'])}</code>",
+         _e(item["start_ts"]), _e(item["end_ts"]), _e(item["duration_seconds"]),
+         f"<code>{_e(item['reason'])}</code>",
+         _e(",".join(str(number) for number in item["line_numbers"]) or "-")]
+        for rule in rules for item in rule["unknown_intervals"]
+    ]
+    pending_rows = [
+        [f"<code>{_e(item['device_id'])}</code>",
+         f"<code>{_e(item['point_key'])}</code>",
+         f"<code>{_e(item['rule_id'])}</code>",
+         _e(item["start_ts"]), _e(item["end_ts"]),
+         f"<code>{_e(item['reason'])}</code>",
+         _e(",".join(str(number) for number in item["line_numbers"]) or "-")]
+        for item in unknown_pending
+    ]
+    return f"""
+<section>
+<h2>双点位持续联锁</h2>
+<p class="note">已证联锁、已证正常与未知缺口分开统计；未知缺口不计为正常。</p>
+{_table(['规则', '设备', '采样语义', '阈值', '最短持续(min)', '陈旧上限(min)',
+         '已证联锁(s)', '已证正常(s)', '未知(s)', '事件'], rule_rows)}
+<h2>已证联锁事件</h2>
+{_table(['规则', '起始', '结束', '持续(s)', '峰值 A', '峰值 B', '源行号',
+         '中断原因', '中断行号'], event_rows)}
+<h2>未知缺口（不计为正常）</h2>
+{_table(['规则', '起始', '结束', '持续(s)', '原因', '源行号'], unknown_rows)}
+<h2>联锁未知待复采</h2>
+{_table(['设备', '点位', '规则', '起始', '结束', '原因', '行号'], pending_rows)}
+</section>
 """

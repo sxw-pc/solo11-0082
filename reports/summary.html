@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>点位采录台采集报告 · b_6db3b1425d1f_915981533aed</title>
+<title>点位采录台采集报告 · b_6db3b1425d1f_17fd25084aa0</title>
 <style>
 :root { color-scheme: light; --ink:#17202a; --muted:#5d6d7e; --line:#d5dde5;
         --paper:#f7f9fb; --card:#ffffff; --accent:#1f5f8b; --warn:#8a5a00;
@@ -44,19 +44,19 @@ footer { color:var(--muted); border-top:1px solid var(--line); margin-top:30px;
 <main>
 <header>
 <h1>点位采录台采集报告</h1>
-<p class="lead">离线回放采集台账 · 批次 <span class="mono">b_6db3b1425d1f_915981533aed</span></p>
+<p class="lead">离线回放采集台账 · 批次 <span class="mono">b_6db3b1425d1f_17fd25084aa0</span></p>
 </header>
 
 <section>
 <h2>批次信息</h2>
 <table><tbody>
 <tr><th>状态</th><td>completed</td></tr>
-<tr><th>开始时间</th><td>2026-11-15T02:03:59Z</td></tr>
-<tr><th>结束时间</th><td>2026-11-15T02:04:03Z</td></tr>
+<tr><th>开始时间</th><td>2026-11-16T21:27:17Z</td></tr>
+<tr><th>结束时间</th><td>2026-11-16T21:27:17Z</td></tr>
 <tr><th>回放文件</th><td>replay_demo.jsonl</td></tr>
 <tr><th>回放 SHA-256</th><td class="mono">6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa</td></tr>
 <tr><th>点位契约</th><td>points.yaml</td></tr>
-<tr><th>契约 SHA-256</th><td class="mono">915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326</td></tr>
+<tr><th>契约 SHA-256</th><td class="mono">17fd25084aa0e62976e7cbccf1b2c9d00cebd13bb1907199902d4f3000e921eb</td></tr>
 <tr><th>回放总行数 / 已处理</th><td>19 / 19</td></tr>
 </tbody></table>
 </section>
@@ -81,6 +81,20 @@ footer { color:var(--muted); border-top:1px solid var(--line); margin-top:30px;
 <h2>问题分布</h2>
 <table><thead><tr><th>问题码</th><th>数量</th></tr></thead><tbody><tr><td><code>bad_crc_request</code></td><td>1</td></tr><tr><td><code>bad_crc_response</code></td><td>1</td></tr><tr><td><code>byte_count_mismatch</code></td><td>1</td></tr><tr><td><code>duplicate</code></td><td>1</td></tr><tr><td><code>exception_response</code></td><td>1</td></tr><tr><td><code>missing_response</code></td><td>1</td></tr><tr><td><code>no_contract</code></td><td>1</td></tr><tr><td><code>not_in_enum</code></td><td>1</td></tr><tr><td><code>overflow</code></td><td>1</td></tr><tr><td><code>slave_mismatch</code></td><td>1</td></tr><tr><td><code>truncated_frame</code></td><td>1</td></tr><tr><td><code>under_range</code></td><td>1</td></tr></tbody></table>
 </section>
+
+
+<section>
+<h2>双点位持续联锁</h2>
+<p class="note">已证联锁、已证正常与未知缺口分开统计；未知缺口不计为正常。</p>
+<table><thead><tr><th>规则</th><th>设备</th><th>采样语义</th><th>阈值</th><th>最短持续(min)</th><th>陈旧上限(min)</th><th>已证联锁(s)</th><th>已证正常(s)</th><th>未知(s)</th><th>事件</th></tr></thead><tbody><tr><td><code>line_a_pressure_level@v1</code></td><td><code>line-a</code></td><td>bounded_hold</td><td>line_a_pressure &gt; 150 AND line_a_level &gt; 2.5</td><td>2.0</td><td>5.0</td><td>0.0</td><td>35.0</td><td>20.0</td><td>0</td></tr></tbody></table>
+<h2>已证联锁事件</h2>
+<table><thead><tr><th>规则</th><th>起始</th><th>结束</th><th>持续(s)</th><th>峰值 A</th><th>峰值 B</th><th>源行号</th><th>中断原因</th><th>中断行号</th></tr></thead><tbody><tr><td colspan="9">无记录</td></tr></tbody></table>
+<h2>未知缺口（不计为正常）</h2>
+<table><thead><tr><th>规则</th><th>起始</th><th>结束</th><th>持续(s)</th><th>原因</th><th>源行号</th></tr></thead><tbody><tr><td><code>line_a_pressure_level</code></td><td>2025-03-01T00:00:20Z</td><td>2025-03-01T00:00:30Z</td><td>10.0</td><td><code>insufficient_evidence</code></td><td>5</td></tr><tr><td><code>line_a_pressure_level</code></td><td>2025-03-01T00:01:05Z</td><td>2025-03-01T00:01:15Z</td><td>10.0</td><td><code>bad_evidence</code></td><td>5,14</td></tr></tbody></table>
+<h2>联锁未知待复采</h2>
+<table><thead><tr><th>设备</th><th>点位</th><th>规则</th><th>起始</th><th>结束</th><th>原因</th><th>行号</th></tr></thead><tbody><tr><td><code>line-a</code></td><td><code>line_a_pressure+line_a_level</code></td><td><code>line_a_pressure_level</code></td><td>2025-03-01T00:00:20Z</td><td>2025-03-01T00:00:30Z</td><td><code>insufficient_evidence</code></td><td>5</td></tr><tr><td><code>line-a</code></td><td><code>line_a_pressure+line_a_level</code></td><td><code>line_a_pressure_level</code></td><td>2025-03-01T00:01:05Z</td><td>2025-03-01T00:01:15Z</td><td><code>bad_evidence</code></td><td>5,14</td></tr></tbody></table>
+</section>
+
 
 <section>
 <h2>按设备统计</h2>

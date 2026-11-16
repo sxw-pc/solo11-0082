@@ -17,7 +17,9 @@ def test_demo_capture_end_to_end(demo_run):
     assert result.valid_readings == 8
     assert result.issue_count == 12
     assert result.pending_points == 7
-    assert set(result.report_paths) == {"json", "markdown", "html", "csv"}
+    assert set(result.report_paths) == {
+        "json", "markdown", "html", "csv", "interlock_csv",
+    }
 
     store = Store(demo_run.paths.db, read_only=True)
     try:

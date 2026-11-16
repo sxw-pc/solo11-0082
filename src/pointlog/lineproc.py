@@ -224,8 +224,13 @@ def process_line(
     engineering = normalize_number(engineering)
     range_code = codec.classify_range(engineering, point.range_min, point.range_max)
     in_enum, label = codec.enum_label(point.enum, raw_value)
-    duplicate = store.reading_exists(
+    existing = store.find_reading(
         batch_id, point.device_id, point.point_key, line.ts
+    )
+    duplicate = existing is not None
+    contradictory = bool(
+        duplicate
+        and abs(float(existing["engineering_value"]) - float(engineering)) > 1e-9
     )
     quality = determine_quality(QualityFlags(
         duplicate=duplicate,
@@ -235,11 +240,14 @@ def process_line(
     ))
     frame["quality_code"] = quality
     if quality != GOOD:
-        frame["issue_code"] = quality
-        frame["detail"] = _quality_detail(quality, engineering, point)
+        issue_code = "contradictory_value" if contradictory else quality
+        frame["issue_code"] = issue_code
+        frame["detail"] = _quality_detail(
+            quality, engineering, point, contradictory=contradictory
+        )
         pending = is_pending(quality)
         issues = [_issue(
-            line, issue_code=quality, quality_code=quality,
+            line, issue_code=issue_code, quality_code=quality,
             summary=line.response_hex, detail=frame["detail"],
             point=point, pending=pending,
         )]
@@ -263,7 +271,10 @@ def process_line(
     return ProcessedLine(frame=frame, issues=issues, reading=reading)
 
 
-def _quality_detail(quality: str, engineering: float, point: PointContract) -> str:
+def _quality_detail(
+    quality: str, engineering: float, point: PointContract,
+    *, contradictory: bool = False,
+) -> str:
     if quality == "overflow":
         return f"engineering {engineering} > range maximum {point.range_max}"
     if quality == "under_range":
@@ -271,8 +282,14 @@ def _quality_detail(quality: str, engineering: float, point: PointContract) -> s
     if quality == "not_in_enum":
         return f"raw value is absent from enum mapping for {point.point_key}"
     if quality == DUPLICATE:
-        return (
+        detail = (
             f"duplicate device={point.device_id} point={point.point_key} "
             "timestamp already stored in this batch"
         )
+        if contradictory:
+            detail += (
+                f"; stored engineering value differs from {engineering}, "
+                "so this timestamp cannot be judged"
+            )
+        return detail
     return quality

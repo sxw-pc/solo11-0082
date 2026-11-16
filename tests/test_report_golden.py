@@ -15,13 +15,15 @@ def test_json_summary_has_stable_shape(demo_run):
         "devices",
         "points",
         "pending_recollect",
+        "interlock",
+        "interlock_pending_recollect",
     ]
     assert list(summary["batch"]) == [
         "id", "status", "started_at", "finished_at", "total_lines",
         "processed_lines", "replay_file", "replay_sha256", "contract_file",
         "contract_sha256",
     ]
-    assert summary["schema_version"] == 1
+    assert summary["schema_version"] == 2
     assert summary["batch"]["status"] == "completed"
     assert summary["batch"]["total_lines"] == 19
     assert summary["batch"]["replay_file"] == "replay_demo.jsonl"
@@ -83,7 +85,8 @@ def test_pending_csv(demo_run):
 
 
 def test_reports_are_deterministic_across_rerun(demo_run):
-    names = ("summary.json", "summary.md", "summary.html", "pending_recollect.csv")
+    names = ("summary.json", "summary.md", "summary.html",
+             "pending_recollect.csv", "interlock_pending.csv")
     before = {
         name: (demo_run.paths.reports / name).read_bytes() for name in names
     }

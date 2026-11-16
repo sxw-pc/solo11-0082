@@ -18,6 +18,7 @@ from .store import Store
 from .store_queries import (
     batch_list,
     batch_totals,
+    interlock_summary,
     issue_distribution,
     pending_recollect,
     quality_distribution,
@@ -139,6 +140,65 @@ def _show_command(args: argparse.Namespace) -> int:
         print(f"待重采清单: {len(pending)} 类")
         for item in pending:
             print(f"  {item['device_id']}/{item['point_key']}  {item['issue_code']}  x{item['occurrences']}")
+        _print_interlocks(store, batch["id"])
+    finally:
+        store.close()
+    return 0
+
+
+def _print_interlocks(store: Store, batch_id: str) -> None:
+    try:
+        contract = _contract_for_batch(store, batch_id)
+    except (ContractError, OSError) as exc:
+        print(f"联锁未显示: 无法读取记录的点位契约 ({exc})")
+        return
+    summary = interlock_summary(store, batch_id, contract)
+    rules = summary["rules"]
+    if not rules:
+        return
+    print("双点位持续联锁:")
+    for rule in rules:
+        totals = rule["totals"]
+        print(
+            f"  {rule['rule_id']}@v{rule['version']} [{rule['sampling']}] "
+            f"已证联锁 {totals['proven_interlock_seconds']}s / "
+            f"已证正常 {totals['proven_normal_seconds']}s / "
+            f"未知 {totals['unknown_seconds']}s / 事件 {totals['event_count']}"
+        )
+        for event in rule["events"]:
+            print(
+                f"    事件 {event['start_ts']} — {event['end_ts']} "
+                f"({event['duration_seconds']}s) "
+                f"峰值 {event['peak_a']}/{event['peak_b']} "
+                f"中断 {event['interruption_reason']} "
+                f"行 {','.join(str(n) for n in event['line_numbers'])}"
+            )
+        for interval in rule["unknown_intervals"]:
+            print(
+                f"    未知 {interval['start_ts']} — {interval['end_ts']} "
+                f"({interval['duration_seconds']}s) {interval['reason']} "
+                f"行 {','.join(str(n) for n in interval['line_numbers']) or '-'}"
+            )
+
+
+def _contract_for_batch(store: Store, batch_id: str):
+    """Load the recorded contract for read-only interlock display."""
+    from .contract import load_contract
+
+    batch = store.get_batch(batch_id)
+    if batch is None:
+        raise FileNotFoundError(f"batch does not exist: {batch_id}")
+    return load_contract(batch["contract_path"])
+
+
+def _interlock_command(args: argparse.Namespace) -> int:
+    store = _open_store(args.db)
+    try:
+        batch = store.get_batch(args.batch_id)
+        if batch is None:
+            print(f"批次不存在: {args.batch_id}", file=sys.stderr)
+            return 4
+        _print_interlocks(store, batch["id"])
     finally:
         store.close()
     return 0
@@ -187,6 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db(show)
     show.add_argument("batch_id")
     show.set_defaults(func=_show_command)
+
+    interlock = sub.add_parser("interlock", help="显示批次的双点位持续联锁结果")
+    _add_db(interlock)
+    interlock.add_argument("batch_id")
+    interlock.set_defaults(func=_interlock_command)
 
     serve_parser = sub.add_parser("serve", help="启动只读本地复核台")
     _add_db(serve_parser)

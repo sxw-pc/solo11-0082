@@ -10,6 +10,8 @@ from .store import Store
 from .store_queries import (
     batch_totals,
     device_stats,
+    interlock_summary,
+    interlock_unknown_pending,
     issue_distribution,
     pending_recollect,
     point_stats,
@@ -31,8 +33,11 @@ def collect_summary(
     pending = pending_recollect(store, batch_id)
     quality = quality_distribution(store, batch_id)
     issues = issue_distribution(store, batch_id)
+    interlocks = interlock_summary(store, batch_id, contract)
+    unknown_pending = interlock_unknown_pending(store, batch_id, contract)
     return {
-        "schema_version": 1,
+        # Report shape version; bumped when interlock sections were added.
+        "schema_version": 2,
         "batch": {
             "id": batch["id"],
             "status": batch["status"],
@@ -57,4 +62,6 @@ def collect_summary(
         "devices": device_stats(store, batch_id, contract),
         "points": point_stats(store, batch_id, contract),
         "pending_recollect": pending,
+        "interlock": interlocks,
+        "interlock_pending_recollect": unknown_pending,
     }

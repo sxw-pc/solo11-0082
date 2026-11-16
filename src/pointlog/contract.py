@@ -15,6 +15,37 @@ from .codec import BYTE_ORDERS_16, BYTE_ORDERS_32, DATA_TYPES, REGISTER_COUNTS
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
+SAMPLING_BOUNDED_HOLD = "bounded_hold"
+SAMPLING_STRICT_SIMULTANEOUS = "strict_simultaneous"
+SAMPLING_MODES = (SAMPLING_BOUNDED_HOLD, SAMPLING_STRICT_SIMULTANEOUS)
+SAMPLING_ALIASES = {
+    SAMPLING_BOUNDED_HOLD: SAMPLING_BOUNDED_HOLD,
+    "bounded": SAMPLING_BOUNDED_HOLD,
+    "hold": SAMPLING_BOUNDED_HOLD,
+    SAMPLING_STRICT_SIMULTANEOUS: SAMPLING_STRICT_SIMULTANEOUS,
+    "strict": SAMPLING_STRICT_SIMULTANEOUS,
+    "same_timestamp": SAMPLING_STRICT_SIMULTANEOUS,
+    "simultaneous": SAMPLING_STRICT_SIMULTANEOUS,
+}
+
+DIRECTION_ABOVE = "above"
+DIRECTION_BELOW = "below"
+DIRECTIONS = (DIRECTION_ABOVE, DIRECTION_BELOW)
+DIRECTION_ALIASES = {
+    DIRECTION_ABOVE: DIRECTION_ABOVE,
+    "high": DIRECTION_ABOVE,
+    "greater": DIRECTION_ABOVE,
+    "gt": DIRECTION_ABOVE,
+    ">": DIRECTION_ABOVE,
+    ">=": DIRECTION_ABOVE,
+    DIRECTION_BELOW: DIRECTION_BELOW,
+    "low": DIRECTION_BELOW,
+    "less": DIRECTION_BELOW,
+    "lt": DIRECTION_BELOW,
+    "<": DIRECTION_BELOW,
+    "<=": DIRECTION_BELOW,
+}
+
 
 class ContractError(ValueError):
     """A static contract error; raised before any batch is written."""
@@ -64,12 +95,66 @@ class PointContract:
 
 
 @dataclass(frozen=True)
+class InterlockPoint:
+    """One side of a two-point sustained interlock rule."""
+
+    point_key: str
+    threshold: float
+    direction: str = DIRECTION_ABOVE
+    inclusive: bool = False
+
+    def is_triggered(self, value: float) -> bool:
+        if self.direction == DIRECTION_ABOVE:
+            return value >= self.threshold if self.inclusive else value > self.threshold
+        return value <= self.threshold if self.inclusive else value < self.threshold
+
+    def describe(self) -> str:
+        operator = self.direction
+        if self.direction == DIRECTION_ABOVE:
+            operator = ">=" if self.inclusive else ">"
+        else:
+            operator = "<=" if self.inclusive else "<"
+        return f"{self.point_key} {operator} {self.threshold:g}"
+
+
+@dataclass(frozen=True)
+class InterlockRule:
+    """A per-device rule combining two point conditions over time."""
+
+    rule_id: str
+    device_id: str
+    version: int
+    points: tuple[InterlockPoint, InterlockPoint]
+    min_duration_minutes: float
+    max_stale_minutes: float
+    sampling: str = SAMPLING_BOUNDED_HOLD
+    description: str = ""
+
+    @property
+    def min_duration_seconds(self) -> float:
+        return self.min_duration_minutes * 60.0
+
+    @property
+    def max_stale_seconds(self) -> float:
+        return self.max_stale_minutes * 60.0
+
+    @property
+    def point_keys(self) -> tuple[str, str]:
+        return (self.points[0].point_key, self.points[1].point_key)
+
+    @property
+    def version_label(self) -> str:
+        return f"{self.rule_id}@v{self.version}"
+
+
+@dataclass(frozen=True)
 class ContractSet:
     version: int
     devices: tuple[Device, ...]
     points: tuple[PointContract, ...]
     by_match: dict[tuple[int, int, int, int], PointContract]
     by_key: dict[str, PointContract]
+    interlocks: tuple[InterlockRule, ...] = ()
 
     def find(self, slave_id: int, function: int, start: int, count: int):
         return self.by_match.get((slave_id, function, start, count))
@@ -82,6 +167,15 @@ class ContractSet:
             if device.device_id == device_id:
                 return device.label
         return device_id
+
+    def interlocks_for(self, device_id: str) -> list[InterlockRule]:
+        return [rule for rule in self.interlocks if rule.device_id == device_id]
+
+    def interlock(self, rule_id: str) -> InterlockRule | None:
+        for rule in self.interlocks:
+            if rule.rule_id == rule_id:
+                return rule
+        return None
 
 
 def _number(value: Any) -> bool:
@@ -187,6 +281,92 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
     )
 
 
+def _parse_interlock_point(raw: Any, location: str) -> InterlockPoint:
+    _require(isinstance(raw, dict), "contract_interlock",
+             "interlock point must be a mapping", location)
+    key = raw.get("key")
+    _require(isinstance(key, str) and bool(KEY_RE.match(key)), "contract_interlock",
+             "interlock point key is invalid", location)
+    threshold = raw.get("threshold")
+    _require(_number(threshold), "contract_interlock_threshold",
+             "interlock threshold must be a finite number", location)
+    raw_direction = raw.get("direction", DIRECTION_ABOVE)
+    _require(isinstance(raw_direction, str), "contract_interlock_direction",
+             "interlock direction must be a string", location)
+    direction = DIRECTION_ALIASES.get(raw_direction.strip().lower())
+    _require(direction is not None, "contract_interlock_direction",
+             f"direction must be one of {', '.join(DIRECTIONS)}", location)
+    raw_inclusive = raw.get("inclusive", raw_direction.strip() in (">=", "<="))
+    _require(isinstance(raw_inclusive, bool), "contract_interlock_direction",
+             "inclusive must be a boolean", location)
+    return InterlockPoint(
+        point_key=key,
+        threshold=float(threshold),
+        direction=direction,
+        inclusive=raw_inclusive,
+    )
+
+
+def _parse_interlock(
+    raw: Any,
+    device_id: str,
+    location: str,
+    points_by_key: dict[str, PointContract],
+) -> InterlockRule:
+    _require(isinstance(raw, dict), "contract_interlock",
+             "interlock must be a mapping", location)
+    rule_id = raw.get("id")
+    _require(isinstance(rule_id, str) and bool(KEY_RE.match(rule_id)),
+             "contract_interlock", "interlock id is invalid", location)
+    version = raw.get("version", 1)
+    _require(isinstance(version, int) and not isinstance(version, bool) and version >= 1,
+             "contract_interlock", "interlock version must be a positive integer",
+             location)
+    raw_points = raw.get("points")
+    _require(isinstance(raw_points, list) and len(raw_points) == 2,
+             "contract_interlock", "interlock must declare exactly two points", location)
+    parsed = tuple(
+        _parse_interlock_point(item, f"{location}.points[{index}]")
+        for index, item in enumerate(raw_points, start=1)
+    )
+    _require(parsed[0].point_key != parsed[1].point_key, "contract_interlock_point",
+             "interlock points must be two distinct point keys", location)
+    for item in parsed:
+        point = points_by_key.get(item.point_key)
+        _require(point is not None, "contract_interlock_point",
+                 f"interlock references unknown point {item.point_key}", location)
+        _require(point.device_id == device_id, "contract_interlock_point",
+                 f"interlock point {item.point_key} belongs to device "
+                 f"{point.device_id}, not {device_id}", location)
+    raw_duration = raw.get("min_duration_minutes")
+    _require(_number(raw_duration) and float(raw_duration) > 0,
+             "contract_interlock_duration",
+             "min_duration_minutes must be a positive finite number", location)
+    raw_stale = raw.get("max_stale_minutes")
+    _require(_number(raw_stale) and float(raw_stale) > 0,
+             "contract_interlock_stale",
+             "max_stale_minutes must be a positive finite number", location)
+    raw_sampling = raw.get("sampling", SAMPLING_BOUNDED_HOLD)
+    _require(isinstance(raw_sampling, str), "contract_interlock_sampling",
+             "sampling must be a string", location)
+    sampling = SAMPLING_ALIASES.get(raw_sampling.strip().lower())
+    _require(sampling is not None, "contract_interlock_sampling",
+             f"sampling must be one of {', '.join(SAMPLING_MODES)}", location)
+    description = raw.get("description", "")
+    _require(isinstance(description, str), "contract_interlock",
+             "interlock description must be a string", location)
+    return InterlockRule(
+        rule_id=rule_id,
+        device_id=device_id,
+        version=int(version),
+        points=parsed,
+        min_duration_minutes=float(raw_duration),
+        max_stale_minutes=float(raw_stale),
+        sampling=sampling,
+        description=description,
+    )
+
+
 def parse_contract(text: str, source: str = "<memory>") -> ContractSet:
     try:
         root = yaml.safe_load(text)
@@ -200,6 +380,7 @@ def parse_contract(text: str, source: str = "<memory>") -> ContractSet:
              "devices must be a non-empty list")
     devices: list[Device] = []
     points: list[PointContract] = []
+    raw_interlocks: list[tuple[str, str, Any]] = []
     seen_device_ids: set[str] = set()
     seen_keys: set[str] = set()
     seen_matches: set[tuple[int, int, int, int]] = set()
@@ -230,12 +411,33 @@ def parse_contract(text: str, source: str = "<memory>") -> ContractSet:
             seen_keys.add(point.point_key)
             seen_matches.add(point.match_key)
             points.append(point)
+        raw_device_interlocks = raw_device.get("interlocks", [])
+        _require(isinstance(raw_device_interlocks, list), "contract_interlock",
+                 "interlocks must be a list", location)
+        for interlock_index, raw_interlock in enumerate(raw_device_interlocks, start=1):
+            raw_interlocks.append((
+                device_id,
+                f"{location}.interlocks[{interlock_index}]",
+                raw_interlock,
+            ))
+    points_by_key = {point.point_key: point for point in points}
+    interlocks: list[InterlockRule] = []
+    seen_rule_ids: set[str] = set()
+    for device_id, interlock_location, raw_interlock in raw_interlocks:
+        rule = _parse_interlock(
+            raw_interlock, device_id, interlock_location, points_by_key
+        )
+        _require(rule.rule_id not in seen_rule_ids, "contract_duplicate_interlock",
+                 f"duplicate interlock id {rule.rule_id}", interlock_location)
+        seen_rule_ids.add(rule.rule_id)
+        interlocks.append(rule)
     return ContractSet(
         version=version,
         devices=tuple(devices),
         points=tuple(points),
         by_match={point.match_key: point for point in points},
-        by_key={point.point_key: point for point in points},
+        by_key=points_by_key,
+        interlocks=tuple(interlocks),
     )
 
 

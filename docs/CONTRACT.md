@@ -31,6 +31,7 @@ devices:
 | `devices[].id` | 是 | 唯一，匹配 `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}` |
 | `devices[].label` | 否 | 非空字符串，缺省等于 `id` |
 | `devices[].points` | 是 | 非空列表 |
+| `devices[].interlocks` | 否 | 双点位持续联锁规则列表，默认空 |
 
 ## 2. 点位字段
 
@@ -115,11 +116,59 @@ devices:
 [contract_register_count] config/points.yaml:devices[1].points[1]: uint32 requires exactly 2 register(s)
 ```
 
-## 6. 契约指纹
+## 6. 双点位联锁规则
+
+`interlocks` 可选，声明在设备下，引用该设备自己的点位。每条规则：
+
+```yaml
+    interlocks:
+      - id: line_a_pressure_level
+        version: 1
+        points:
+          - {key: line_a_pressure, threshold: 150, direction: above}
+          - {key: line_a_level, threshold: 2.5, direction: above}
+        min_duration_minutes: 2
+        max_stale_minutes: 5
+        sampling: bounded_hold
+        description: 可选说明，不参与判定
+```
+
+| 字段 | 类型 | 必填 | 规则 |
+| --- | --- | --- | --- |
+| `id` | string | 是 | 全局唯一，匹配 `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}` |
+| `version` | integer | 否 | 默认 1；正整数，写入每个事件 |
+| `points` | list | 是 | 恰好两个；`key` 必须是同设备点位且互不相同 |
+| `points[].threshold` | number | 是 | 有限数值，与 engineering value 比较 |
+| `points[].direction` | string | 否 | `above`（默认）或 `below` |
+| `points[].inclusive` | bool | 否 | 默认 false；true 时 `above`→`>=`、`below`→`<=` |
+| `min_duration_minutes` | number | 是 | 正有限数；连续同时为真的最短时长 |
+| `max_stale_minutes` | number | 是 | 正有限数；有界保持模式下样本最大有效年龄 |
+| `sampling` | string | 否 | `bounded_hold`（默认）或 `strict_simultaneous` |
+| `description` | string | 否 | 说明文本 |
+
+采样语义授权：
+
+- `bounded_hold`：最近可信样本在 `max_stale_minutes` 内延续，直到下一样本、过期或坏证据；不跨越坏帧和明确正常值。
+- `strict_simultaneous`：只在两点同一时间戳均有可信样本时确认；不推断离散观测之间的持续时间，因此正门槛下不会产生持续事件，而是给出已确认时刻和未知区间。
+
+新增错误码：
+
+| 错误码 | 触发条件 |
+| --- | --- |
+| `contract_interlock` | 规则非映射、id/version 非法、points 数量错误、description 非字符串 |
+| `contract_interlock_threshold` | 阈值为非有限数值 |
+| `contract_interlock_direction` | 方向非法或 inclusive 非布尔 |
+| `contract_interlock_point` | 点位未知、跨设备、或两个点位相同 |
+| `contract_interlock_duration` | `min_duration_minutes` 非正/非有限 |
+| `contract_interlock_stale` | `max_stale_minutes` 非正/非有限 |
+| `contract_interlock_sampling` | 采样语义非法 |
+| `contract_duplicate_interlock` | 规则 id 重复 |
+
+## 7. 契约指纹
 
 批次保存契约文件的原始字节 sha256。即使语义相同，只要文件字节改变（包括注释、空白），指纹就会变化，可能产生新批次并导致续采拒绝。这样做优先保证“输入可追溯”和续采安全，而不是语义级归一化。
 
-## 7. 完整演示契约
+## 8. 完整演示契约
 
 `config/points.yaml` 是完整可运行示例，包含：
 
@@ -130,7 +179,7 @@ devices:
 - 量程与枚举；
 - 一个故意在回放中缺失的点位，用于验证 `missing_response`。
 
-## 8. 不支持的契约能力
+## 9. 不支持的契约能力
 
 - 位域、位掩码、字符串、数组、时间类型。
 - 一个响应拆分多个点位，或一个点位跨多个响应。

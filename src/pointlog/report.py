@@ -108,8 +108,76 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ))
     else:
         lines.append("无待重采点位。")
+    lines += render_interlock_markdown(summary["interlock"],
+                                       summary["interlock_pending_recollect"])
     lines.append("")
     return "\n".join(lines)
+
+
+def render_interlock_markdown(
+    interlock: dict[str, Any], unknown_pending: list[dict[str, Any]]
+) -> list[str]:
+    """Three-valued interlock section: proven / normal / unknown are distinct."""
+    lines = ["", "## 双点位持续联锁", ""]
+    rules = interlock["rules"]
+    if not rules:
+        lines.append("本批次契约未声明双点位联锁规则。")
+        return lines
+    lines.append(_table(
+        ["规则", "设备", "采样语义", "阈值", "最短持续(min)", "陈旧上限(min)",
+         "已证联锁(s)", "已证正常(s)", "未知(s)", "事件"],
+        [[
+            f"{item['rule_id']}@v{item['version']}", item["device_id"],
+            item["sampling"],
+            " AND ".join(
+                f"{point['point_key']} "
+                f"{'>' if point['direction'] == 'above' else '<'}"
+                f"{'=' if point['inclusive'] else ''} {point['threshold']:g}"
+                for point in item["points"]
+            ),
+            item["min_duration_minutes"], item["max_stale_minutes"],
+            item["totals"]["proven_interlock_seconds"],
+            item["totals"]["proven_normal_seconds"],
+            item["totals"]["unknown_seconds"],
+            item["totals"]["event_count"],
+        ] for item in rules],
+    ))
+    event_rows = [
+        [
+            item["rule_id"], f"{item['start_ts']} — {item['end_ts']}",
+            item["duration_seconds"], item["peak_a"], item["peak_b"],
+            ",".join(str(number) for number in item["line_numbers"]) or "-",
+            item["interruption_reason"],
+            ",".join(str(number) for number in item["interruption_lines"]) or "-",
+        ]
+        for rule in rules for item in rule["events"]
+    ]
+    lines += ["", "### 已证联锁事件", ""]
+    lines.append(_table(
+        ["规则", "起止", "持续(s)", "峰值 A", "峰值 B", "源行号",
+         "中断原因", "中断行号"],
+        event_rows,
+    ) if event_rows else "无达到最短持续时间的联锁事件。")
+    unknown_rows = [
+        [item["rule_id"], f"{item['start_ts']} — {item['end_ts']}",
+         item["duration_seconds"], item["reason"],
+         ",".join(str(number) for number in item["line_numbers"]) or "-"]
+        for rule in rules for item in rule["unknown_intervals"]
+    ]
+    lines += ["", "### 未知缺口（不计为正常）", ""]
+    lines.append(_table(
+        ["规则", "起止", "持续(s)", "原因", "源行号"], unknown_rows,
+    ) if unknown_rows else "无未知缺口。")
+    if unknown_pending:
+        lines += ["", "### 联锁未知待复采", ""]
+        lines.append(_table(
+            ["设备", "点位", "规则", "起止", "原因", "行号"],
+            [[item["device_id"], item["point_key"], item["rule_id"],
+              f"{item['start_ts']} — {item['end_ts']}", item["reason"],
+              ",".join(str(number) for number in item["line_numbers"]) or "-"]
+             for item in unknown_pending],
+        ))
+    return lines
 
 
 def render_pending_csv(summary: dict[str, Any]) -> str:
@@ -127,6 +195,31 @@ def render_pending_csv(summary: dict[str, Any]) -> str:
             item["quality_code"],
             item["severity"],
             item["occurrences"],
+            ";".join(str(number) for number in item["line_numbers"]),
+            item["detail"],
+        ])
+    return output.getvalue()
+
+
+def render_interlock_pending_csv(summary: dict[str, Any]) -> str:
+    """Unknown interlock spans, kept separate from single-point recollection."""
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow([
+        "device_id", "point_key", "rule_id", "rule_version", "issue_code",
+        "state", "start_ts", "end_ts", "reason", "line_numbers", "detail",
+    ])
+    for item in summary["interlock_pending_recollect"]:
+        writer.writerow([
+            item["device_id"],
+            item["point_key"],
+            item["rule_id"],
+            item["rule_version"],
+            item["issue_code"],
+            item["state"],
+            item["start_ts"],
+            item["end_ts"],
+            item["reason"],
             ";".join(str(number) for number in item["line_numbers"]),
             item["detail"],
         ])
@@ -155,6 +248,10 @@ def write_reports(
         ),
         "csv": atomic_write_text(
             target / "pending_recollect.csv", render_pending_csv(summary)
+        ),
+        "interlock_csv": atomic_write_text(
+            target / "interlock_pending.csv",
+            render_interlock_pending_csv(summary),
         ),
     }
     return {key: str(path) for key, path in paths.items()}

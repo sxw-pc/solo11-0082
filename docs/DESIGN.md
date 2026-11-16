@@ -28,6 +28,7 @@
 | `report*.py` | JSON/Markdown/HTML/CSV 渲染 | 采集 |
 | `server.py` | 回环只读复核台 | 写接口、远程绑定 |
 | `resume.py` | 指纹校验、偏移重建 | 帧处理 |
+| `interlock.py` | 双点位三值时间线与持续事件（离线、只读推导） | 设备控制、实时告警 |
 
 依赖方向：`cli -> pipeline -> lineproc -> modbus/codec/contract/quality`，`pipeline -> store/resume/report`。底层模块不反向依赖 CLI 或 HTML。
 
@@ -128,7 +129,46 @@ UNIQUE (batch_id, device_id, point_key, ts)
 
 完整顺序见 [QUALITY_CODES.md](QUALITY_CODES.md)。
 
-## 8. 确定性策略
+## 8. 双点位持续联锁
+
+`interlock.py` 在批次完成后，基于已入库的 `readings` 与 `frames` 重新推导，不改变单点 reading、quality 码或待重采口径。
+
+**证据来源**
+
+- 可信样本：`quality_code = 'good'` 且 `ts` 可按 ISO-8601 解析的 reading。`good` 已蕴含帧结构、双端 CRC、解码、量程与枚举全部通过。
+- 坏证据（阻断保持）：同一规则点位上带不可信数值的可归属帧（坏 CRC、截断、从站/功能码不一致、异常应答、解码失败、溢出、欠量程、未入枚举）。`duplicate` 若与已存值矛盾，问题码记为 `contradictory_value`，同样算坏证据。
+- 空洞应答（`missing_response`）不同于坏值：它只是“没有新样本”，不会立即切断仍有界有效的保持，保持可延续到下一样本或陈旧上限。
+- 同刻矛盾：同一 `(device, point, ts)` 出现不同 engineering value，或可信值与坏帧同刻，该时刻判为冲突，不可判安全或越限。
+
+**三值合成**
+
+区间边界由样本时刻、样本过期时刻与坏证据时刻共同构成。每个子区间起点取两路各自“当前有效样本”，单点为：
+
+- 无样本、超过 `max_stale`、或样本之后出现坏证据 → 未知；
+- 否则按阈值给出真/假。
+
+两路合成使用三值 AND：任一明确为假 → `false`；两路都为真 → `true`；其余 → `unknown`。未知区间原因取 `bad_evidence`、`conflicting_values`、`stale_evidence` 或 `insufficient_evidence`，并列出支撑/矛盾行号。
+
+**事件与中断**
+
+仅当 `true` 区间连续覆盖 ≥ `min_duration_minutes` 时产生事件。事件记录起止、两路峰值及峰值时刻、规则版本、源 reading 行号；中断原因按优先级取明确正常、冲突、坏证据、陈旧或到达证据末端。短暂正常值会切出独立区间，坏帧/缺口使持续时钟中断，因此两次离散高值不会被相加。
+
+**两种授权语义**
+
+- `bounded_hold`：按上述保持逻辑推进。
+- `strict_simultaneous`：只在两点同刻样本处取状态，区间时长为 0；其余时间标 `unknown / no_simultaneous_sample`。持续门槛为正时不会产生事件，但已确认时刻仍被记录。
+
+**幂等与确定性**
+
+- 事件键 `ev_<sha256>` 由 `replay_sha256 | contract_sha256 | rule_id | version | sampling | start | end` 决定。
+- 评估是批次行的纯函数；落库时在同一事务内先删除该批次既有区间/事件再整批写入，因此乱序、重复行、续采尾段与显式重算都得到相同结论且不重复插入。
+- 报告与查询不输出 SQLite 自增 `id`，保证重复生成报告字节稳定。
+
+**报告口径**
+
+`interlock` 汇总分规则给出“已证联锁 / 已证正常 / 未知”秒数与事件；`interlock_pending_recollect` 与 `interlock_pending.csv` 单独列出未知缺口，未知不计入正常，也不进入原单点 `pending_recollect` 口径。
+
+## 9. 确定性策略
 
 - fixture 使用固定种子式常量与固定基础时间，不使用随机数和当前时间。
 - 浮点解码显式使用大端 `struct` 格式，不依赖宿主机字节序。
@@ -137,7 +177,7 @@ UNIQUE (batch_id, device_id, point_key, ts)
 - JSON 使用固定字段插入顺序；质量码分布按目录顺序输出。
 - 报告不含生成时刻，只有批次开始/结束时间；复用批次时报告字节稳定。
 
-## 9. 只读复核台
+## 10. 只读复核台
 
 `server.py` 使用标准库 `http.server`，`create_server()` 固定绑定 `127.0.0.1`。每个 GET 请求打开 SQLite `mode=ro` 连接；路由只接受：
 
@@ -146,7 +186,7 @@ UNIQUE (batch_id, device_id, point_key, ts)
 
 未知路径 404；任何非 GET 方法 405 且返回 `Allow: GET`。页面 CSS 内联，无脚本、无外部资源，不包含任何写入/删除/上传接口。
 
-## 10. 明确取舍
+## 11. 明确取舍
 
 - 一个请求只匹配一个契约点：使用 `(slave_id, function, start, count)` 精确匹配，避免“一个多寄存器响应拆多个点位”的歧义。
 - 重复读数不插入，而不是插入一条 `duplicate` 读数，以保持读数表幂等性；`duplicate` 仍出现在帧质量、问题表和待重采之外的分布中。

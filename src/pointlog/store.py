@@ -31,7 +31,8 @@ class Store:
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
-            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (str(SCHEMA_VERSION),),
         )
         self.conn.commit()
@@ -207,12 +208,17 @@ class Store:
             )
 
     def reading_exists(self, batch_id: str, device_id: str, point_key: str, ts: str) -> bool:
+        return self.find_reading(batch_id, device_id, point_key, ts) is not None
+
+    def find_reading(
+        self, batch_id: str, device_id: str, point_key: str, ts: str
+    ) -> dict[str, Any] | None:
         row = self.conn.execute(
-            "SELECT 1 FROM readings WHERE batch_id = ? AND device_id = ? "
+            "SELECT * FROM readings WHERE batch_id = ? AND device_id = ? "
             "AND point_key = ? AND ts = ? LIMIT 1",
             (batch_id, device_id, point_key, ts),
         ).fetchone()
-        return row is not None
+        return self._dict(row)
 
     def seen_contract_points(self, batch_id: str) -> set[str]:
         rows = self.conn.execute(
@@ -262,4 +268,56 @@ class Store:
             self.conn.execute(
                 "UPDATE batches SET status = ?, finished_at = ? WHERE id = ?",
                 (status, finished_at, batch_id),
+            )
+
+    def replace_interlocks(
+        self,
+        batch_id: str,
+        intervals: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> None:
+        """Replace a batch's derived interlock rows in one transaction.
+
+        Interlock conclusions are a pure function of the batch's accepted
+        frames and readings, so replacing (rather than appending) keeps repeat
+        runs, resumed tails and explicit recomputation idempotent: the same
+        replay/contract fingerprints always yield exactly one row per event.
+        """
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM interlock_intervals WHERE batch_id = ?", (batch_id,)
+            )
+            self.conn.execute(
+                "DELETE FROM interlock_events WHERE batch_id = ?", (batch_id,)
+            )
+            self.conn.executemany(
+                "INSERT INTO interlock_intervals("
+                "batch_id, rule_id, rule_version, device_id, state, start_ts, "
+                "end_ts, start_epoch, end_epoch, duration_seconds, reason, "
+                "line_numbers, sample_count) VALUES("
+                ":batch_id,:rule_id,:rule_version,:device_id,:state,:start_ts,"
+                ":end_ts,:start_epoch,:end_epoch,:duration_seconds,:reason,"
+                ":line_numbers,:sample_count)",
+                intervals,
+            )
+            self.conn.executemany(
+                "INSERT INTO interlock_events("
+                "batch_id, event_key, rule_id, rule_version, device_id, point_a, "
+                "point_b, start_ts, end_ts, duration_seconds, peak_a, peak_b, "
+                "peak_a_ts, peak_b_ts, line_numbers, interruption_reason, "
+                "interruption_lines, sampling) VALUES("
+                ":batch_id,:event_key,:rule_id,:rule_version,:device_id,:point_a,"
+                ":point_b,:start_ts,:end_ts,:duration_seconds,:peak_a,:peak_b,"
+                ":peak_a_ts,:peak_b_ts,:line_numbers,:interruption_reason,"
+                ":interruption_lines,:sampling)",
+                events,
+            )
+
+    def clear_interlocks(self, batch_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM interlock_intervals WHERE batch_id = ?", (batch_id,)
+            )
+            self.conn.execute(
+                "DELETE FROM interlock_events WHERE batch_id = ?", (batch_id,)
             )

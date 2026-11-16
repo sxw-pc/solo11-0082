@@ -213,3 +213,159 @@ def batch_totals(store: Store, batch_id: str) -> dict[str, int]:
         "issues": int(issue_count),
         "pending_points": pending_point_count(store, batch_id),
     }
+
+
+def _parse_lines(value: str) -> list[int]:
+    return [int(part) for part in value.split(",") if part.strip()]
+
+
+def interlock_events(
+    store: Store, batch_id: str, rule_id: str | None = None
+) -> list[dict[str, Any]]:
+    query = (
+        "SELECT * FROM interlock_events WHERE batch_id = ?"
+        + (" AND rule_id = ?" if rule_id else "")
+        + " ORDER BY device_id, rule_id, start_ts, end_ts, event_key"
+    )
+    params: tuple[Any, ...] = (batch_id,) if rule_id is None else (batch_id, rule_id)
+    result = []
+    for row in store.conn.execute(query, params):
+        item = dict(row)
+        item.pop("id", None)  # SQLite's row id is not part of the conclusion
+        item["line_numbers"] = _parse_lines(row["line_numbers"])
+        item["interruption_lines"] = _parse_lines(row["interruption_lines"])
+        result.append(item)
+    return result
+
+
+def interlock_intervals(
+    store: Store,
+    batch_id: str,
+    rule_id: str | None = None,
+    state: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses = ["batch_id = ?"]
+    params: list[Any] = [batch_id]
+    if rule_id:
+        clauses.append("rule_id = ?")
+        params.append(rule_id)
+    if state:
+        clauses.append("state = ?")
+        params.append(state)
+    query = (
+        "SELECT * FROM interlock_intervals WHERE " + " AND ".join(clauses)
+        + " ORDER BY device_id, rule_id, start_epoch, end_epoch, state, reason"
+    )
+    result = []
+    for row in store.conn.execute(query, params):
+        item = dict(row)
+        item.pop("id", None)
+        item["line_numbers"] = _parse_lines(row["line_numbers"])
+        result.append(item)
+    return result
+
+
+def interlock_summary(
+    store: Store, batch_id: str, contract: ContractSet
+) -> dict[str, Any]:
+    """Structured three-valued interlock report, separate from point stats."""
+    events = interlock_events(store, batch_id)
+    intervals = interlock_intervals(store, batch_id)
+    rules = []
+    totals = {
+        "proven_interlock_seconds": 0.0,
+        "proven_normal_seconds": 0.0,
+        "unknown_seconds": 0.0,
+        "event_count": 0,
+        "unknown_interval_count": 0,
+        "proven_simultaneous_instants": 0,
+    }
+    for rule in contract.interlocks:
+        rule_intervals = [item for item in intervals if item["rule_id"] == rule.rule_id]
+        rule_events = [item for item in events if item["rule_id"] == rule.rule_id]
+        seconds = {"true": 0.0, "false": 0.0, "unknown": 0.0}
+        proven_instants = 0
+        for item in rule_intervals:
+            seconds[item["state"]] += float(item["duration_seconds"])
+            if item["state"] == "true" and item["reason"] == "simultaneous_sample":
+                proven_instants += 1
+        window_start = min(
+            (item["start_ts"] for item in rule_intervals), default=""
+        )
+        window_end = max((item["end_ts"] for item in rule_intervals), default="")
+        unknown = [item for item in rule_intervals if item["state"] == "unknown"]
+        rules.append({
+            "rule_id": rule.rule_id,
+            "version": rule.version,
+            "device_id": rule.device_id,
+            "description": rule.description,
+            "sampling": rule.sampling,
+            "points": [
+                {
+                    "point_key": point.point_key,
+                    "threshold": point.threshold,
+                    "direction": point.direction,
+                    "inclusive": point.inclusive,
+                }
+                for point in rule.points
+            ],
+            "min_duration_minutes": rule.min_duration_minutes,
+            "max_stale_minutes": rule.max_stale_minutes,
+            "window_start_ts": window_start,
+            "window_end_ts": window_end,
+            "totals": {
+                "proven_interlock_seconds": round(seconds["true"], 6),
+                "proven_normal_seconds": round(seconds["false"], 6),
+                "unknown_seconds": round(seconds["unknown"], 6),
+                "event_count": len(rule_events),
+                "unknown_interval_count": len(unknown),
+                "proven_simultaneous_instants": proven_instants,
+            },
+            "events": rule_events,
+            "intervals": rule_intervals,
+            "unknown_intervals": unknown,
+        })
+        totals["proven_interlock_seconds"] += seconds["true"]
+        totals["proven_normal_seconds"] += seconds["false"]
+        totals["unknown_seconds"] += seconds["unknown"]
+        totals["event_count"] += len(rule_events)
+        totals["unknown_interval_count"] += len(unknown)
+        totals["proven_simultaneous_instants"] += proven_instants
+    for key in totals:
+        if isinstance(totals[key], float):
+            totals[key] = round(totals[key], 6)
+    return {"totals": totals, "rules": rules}
+
+
+def interlock_unknown_pending(
+    store: Store, batch_id: str, contract: ContractSet
+) -> list[dict[str, Any]]:
+    """Unknown interlock spans as recollect hints; never counted as normal."""
+    result = []
+    intervals = interlock_intervals(store, batch_id, state="unknown")
+    for rule in contract.interlocks:
+        for item in intervals:
+            if item["rule_id"] != rule.rule_id:
+                continue
+            point_key = "+".join(rule.point_keys)
+            result.append({
+                "device_id": rule.device_id,
+                "point_key": point_key,
+                "issue_code": "interlock_unknown",
+                "quality_code": "unknown",
+                "severity": "warning",
+                "occurrences": 1,
+                "line_numbers": item["line_numbers"],
+                "detail": (
+                    f"interlock {rule.rule_id} v{rule.version} {rule.sampling}: "
+                    f"{item['start_ts']}..{item['end_ts']} unknown "
+                    f"({item['reason']}); cannot classify as normal"
+                ),
+                "rule_id": rule.rule_id,
+                "rule_version": rule.version,
+                "state": "unknown",
+                "start_ts": item["start_ts"],
+                "end_ts": item["end_ts"],
+                "reason": item["reason"],
+            })
+    return result

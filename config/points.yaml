@@ -121,3 +121,20 @@ devices:
         unit: kWh
         range: [0, 1000000]
         description: Deliberately absent from the demo replay.
+    interlocks:
+      - id: line_a_pressure_level
+        version: 1
+        points:
+          - key: line_a_pressure
+            threshold: 150
+            direction: above
+          - key: line_a_level
+            threshold: 2.5
+            direction: above
+        min_duration_minutes: 2
+        max_stale_minutes: 5
+        sampling: bounded_hold
+        description: >-
+          Synthetic sustained interlock: discharge pressure and tank level
+          must both stay above their limits for two continuous minutes.
+          Evaluation is offline and never commands the device.

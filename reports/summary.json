@@ -1,16 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "batch": {
-    "id": "b_6db3b1425d1f_915981533aed",
+    "id": "b_6db3b1425d1f_17fd25084aa0",
     "status": "completed",
-    "started_at": "2026-11-15T02:03:59Z",
-    "finished_at": "2026-11-15T02:04:03Z",
+    "started_at": "2026-11-16T21:27:17Z",
+    "finished_at": "2026-11-16T21:27:17Z",
     "total_lines": 19,
     "processed_lines": 19,
     "replay_file": "replay_demo.jsonl",
     "replay_sha256": "6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa",
     "contract_file": "points.yaml",
-    "contract_sha256": "915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326"
+    "contract_sha256": "17fd25084aa0e62976e7cbccf1b2c9d00cebd13bb1907199902d4f3000e921eb"
   },
   "totals": {
     "frames": 19,
@@ -238,6 +238,183 @@
         13
       ],
       "detail": "response CRC check failed"
+    }
+  ],
+  "interlock": {
+    "totals": {
+      "proven_interlock_seconds": 0.0,
+      "proven_normal_seconds": 35.0,
+      "unknown_seconds": 20.0,
+      "event_count": 0,
+      "unknown_interval_count": 2,
+      "proven_simultaneous_instants": 0
+    },
+    "rules": [
+      {
+        "rule_id": "line_a_pressure_level",
+        "version": 1,
+        "device_id": "line-a",
+        "description": "Synthetic sustained interlock: discharge pressure and tank level must both stay above their limits for two continuous minutes. Evaluation is offline and never commands the device.",
+        "sampling": "bounded_hold",
+        "points": [
+          {
+            "point_key": "line_a_pressure",
+            "threshold": 150.0,
+            "direction": "above",
+            "inclusive": false
+          },
+          {
+            "point_key": "line_a_level",
+            "threshold": 2.5,
+            "direction": "above",
+            "inclusive": false
+          }
+        ],
+        "min_duration_minutes": 2.0,
+        "max_stale_minutes": 5.0,
+        "window_start_ts": "2025-03-01T00:00:20Z",
+        "window_end_ts": "2025-03-01T00:01:15Z",
+        "totals": {
+          "proven_interlock_seconds": 0.0,
+          "proven_normal_seconds": 35.0,
+          "unknown_seconds": 20.0,
+          "event_count": 0,
+          "unknown_interval_count": 2,
+          "proven_simultaneous_instants": 0
+        },
+        "events": [],
+        "intervals": [
+          {
+            "batch_id": "b_6db3b1425d1f_17fd25084aa0",
+            "rule_id": "line_a_pressure_level",
+            "rule_version": 1,
+            "device_id": "line-a",
+            "state": "unknown",
+            "start_ts": "2025-03-01T00:00:20Z",
+            "end_ts": "2025-03-01T00:00:30Z",
+            "start_epoch": 1740787220.0,
+            "end_epoch": 1740787230.0,
+            "duration_seconds": 10.0,
+            "reason": "insufficient_evidence",
+            "line_numbers": [
+              5
+            ],
+            "sample_count": 2
+          },
+          {
+            "batch_id": "b_6db3b1425d1f_17fd25084aa0",
+            "rule_id": "line_a_pressure_level",
+            "rule_version": 1,
+            "device_id": "line-a",
+            "state": "false",
+            "start_ts": "2025-03-01T00:00:30Z",
+            "end_ts": "2025-03-01T00:01:05Z",
+            "start_epoch": 1740787230.0,
+            "end_epoch": 1740787265.0,
+            "duration_seconds": 35.0,
+            "reason": "explicit_normal",
+            "line_numbers": [
+              5,
+              7
+            ],
+            "sample_count": 1
+          },
+          {
+            "batch_id": "b_6db3b1425d1f_17fd25084aa0",
+            "rule_id": "line_a_pressure_level",
+            "rule_version": 1,
+            "device_id": "line-a",
+            "state": "unknown",
+            "start_ts": "2025-03-01T00:01:05Z",
+            "end_ts": "2025-03-01T00:01:15Z",
+            "start_epoch": 1740787265.0,
+            "end_epoch": 1740787275.0,
+            "duration_seconds": 10.0,
+            "reason": "bad_evidence",
+            "line_numbers": [
+              5,
+              14
+            ],
+            "sample_count": 0
+          }
+        ],
+        "unknown_intervals": [
+          {
+            "batch_id": "b_6db3b1425d1f_17fd25084aa0",
+            "rule_id": "line_a_pressure_level",
+            "rule_version": 1,
+            "device_id": "line-a",
+            "state": "unknown",
+            "start_ts": "2025-03-01T00:00:20Z",
+            "end_ts": "2025-03-01T00:00:30Z",
+            "start_epoch": 1740787220.0,
+            "end_epoch": 1740787230.0,
+            "duration_seconds": 10.0,
+            "reason": "insufficient_evidence",
+            "line_numbers": [
+              5
+            ],
+            "sample_count": 2
+          },
+          {
+            "batch_id": "b_6db3b1425d1f_17fd25084aa0",
+            "rule_id": "line_a_pressure_level",
+            "rule_version": 1,
+            "device_id": "line-a",
+            "state": "unknown",
+            "start_ts": "2025-03-01T00:01:05Z",
+            "end_ts": "2025-03-01T00:01:15Z",
+            "start_epoch": 1740787265.0,
+            "end_epoch": 1740787275.0,
+            "duration_seconds": 10.0,
+            "reason": "bad_evidence",
+            "line_numbers": [
+              5,
+              14
+            ],
+            "sample_count": 0
+          }
+        ]
+      }
+    ]
+  },
+  "interlock_pending_recollect": [
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_pressure+line_a_level",
+      "issue_code": "interlock_unknown",
+      "quality_code": "unknown",
+      "severity": "warning",
+      "occurrences": 1,
+      "line_numbers": [
+        5
+      ],
+      "detail": "interlock line_a_pressure_level v1 bounded_hold: 2025-03-01T00:00:20Z..2025-03-01T00:00:30Z unknown (insufficient_evidence); cannot classify as normal",
+      "rule_id": "line_a_pressure_level",
+      "rule_version": 1,
+      "state": "unknown",
+      "start_ts": "2025-03-01T00:00:20Z",
+      "end_ts": "2025-03-01T00:00:30Z",
+      "reason": "insufficient_evidence"
+    },
+    {
+      "device_id": "line-a",
+      "point_key": "line_a_pressure+line_a_level",
+      "issue_code": "interlock_unknown",
+      "quality_code": "unknown",
+      "severity": "warning",
+      "occurrences": 1,
+      "line_numbers": [
+        5,
+        14
+      ],
+      "detail": "interlock line_a_pressure_level v1 bounded_hold: 2025-03-01T00:01:05Z..2025-03-01T00:01:15Z unknown (bad_evidence); cannot classify as normal",
+      "rule_id": "line_a_pressure_level",
+      "rule_version": 1,
+      "state": "unknown",
+      "start_ts": "2025-03-01T00:01:05Z",
+      "end_ts": "2025-03-01T00:01:15Z",
+      "reason": "bad_evidence"
     }
   ]
 }

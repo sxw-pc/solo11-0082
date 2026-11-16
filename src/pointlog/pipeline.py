@@ -214,6 +214,10 @@ def run_capture(
                 raise
 
         report_paths: dict[str, str] = {}
+        if contract.interlocks:
+            from .interlock import evaluate_batch
+
+            evaluate_batch(store, batch_id, contract)
         if reports_dir is not None:
             from .report import write_reports
 

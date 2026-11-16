@@ -4,14 +4,14 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 批次 ID | b_6db3b1425d1f_915981533aed |
+| 批次 ID | b_6db3b1425d1f_17fd25084aa0 |
 | 状态 | completed |
-| 开始时间 | 2026-11-15T02:03:59Z |
-| 结束时间 | 2026-11-15T02:04:03Z |
+| 开始时间 | 2026-11-16T21:27:17Z |
+| 结束时间 | 2026-11-16T21:27:17Z |
 | 回放文件 | replay_demo.jsonl |
 | 回放 SHA-256 | 6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa |
 | 点位契约 | points.yaml |
-| 契约 SHA-256 | 915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326 |
+| 契约 SHA-256 | 17fd25084aa0e62976e7cbccf1b2c9d00cebd13bb1907199902d4f3000e921eb |
 | 回放总行数 | 19 |
 | 已处理行数 | 19 |
 
@@ -90,3 +90,27 @@
 | line-a | line_a_pressure | bad_crc_request | bad_crc_request | 1 | 14 | request CRC check failed |
 | line-a | line_a_status | byte_count_mismatch | bad_frame | 1 | 17 | response byte count 4 != expected 2 |
 | line-a | line_a_voltage | bad_crc_response | bad_crc_response | 1 | 13 | response CRC check failed |
+
+## 双点位持续联锁
+
+| 规则 | 设备 | 采样语义 | 阈值 | 最短持续(min) | 陈旧上限(min) | 已证联锁(s) | 已证正常(s) | 未知(s) | 事件 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| line_a_pressure_level@v1 | line-a | bounded_hold | line_a_pressure > 150 AND line_a_level > 2.5 | 2.0 | 5.0 | 0.0 | 35.0 | 20.0 | 0 |
+
+### 已证联锁事件
+
+无达到最短持续时间的联锁事件。
+
+### 未知缺口（不计为正常）
+
+| 规则 | 起止 | 持续(s) | 原因 | 源行号 |
+| --- | --- | --- | --- | --- |
+| line_a_pressure_level | 2025-03-01T00:00:20Z — 2025-03-01T00:00:30Z | 10.0 | insufficient_evidence | 5 |
+| line_a_pressure_level | 2025-03-01T00:01:05Z — 2025-03-01T00:01:15Z | 10.0 | bad_evidence | 5,14 |
+
+### 联锁未知待复采
+
+| 设备 | 点位 | 规则 | 起止 | 原因 | 行号 |
+| --- | --- | --- | --- | --- | --- |
+| line-a | line_a_pressure+line_a_level | line_a_pressure_level | 2025-03-01T00:00:20Z — 2025-03-01T00:00:30Z | insufficient_evidence | 5 |
+| line-a | line_a_pressure+line_a_level | line_a_pressure_level | 2025-03-01T00:01:05Z — 2025-03-01T00:01:15Z | bad_evidence | 5,14 |

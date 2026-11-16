@@ -1,6 +1,6 @@
 """SQLite schema for the capture ledger."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -92,6 +92,51 @@ CREATE TABLE IF NOT EXISTS resume_state (
     FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
 );
 
+-- Three-valued interlock timeline segments, recomputed deterministically from
+-- trusted readings plus bad/duplicate frames for the same batch.
+CREATE TABLE IF NOT EXISTS interlock_intervals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    rule_version INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('true', 'false', 'unknown')),
+    start_ts TEXT NOT NULL,
+    end_ts TEXT NOT NULL,
+    start_epoch REAL NOT NULL,
+    end_epoch REAL NOT NULL,
+    duration_seconds REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    line_numbers TEXT NOT NULL DEFAULT '',
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (batch_id, rule_id, rule_version, state, start_ts, end_ts, reason),
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS interlock_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    rule_version INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    point_a TEXT NOT NULL,
+    point_b TEXT NOT NULL,
+    start_ts TEXT NOT NULL,
+    end_ts TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    peak_a REAL NOT NULL,
+    peak_b REAL NOT NULL,
+    peak_a_ts TEXT NOT NULL DEFAULT '',
+    peak_b_ts TEXT NOT NULL DEFAULT '',
+    line_numbers TEXT NOT NULL DEFAULT '',
+    interruption_reason TEXT NOT NULL,
+    interruption_lines TEXT NOT NULL DEFAULT '',
+    sampling TEXT NOT NULL,
+    UNIQUE (batch_id, event_key),
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_frames_batch_quality
     ON frames(batch_id, quality_code);
 CREATE INDEX IF NOT EXISTS idx_readings_batch_point
@@ -102,4 +147,8 @@ CREATE INDEX IF NOT EXISTS idx_batches_fingerprint
     ON batches(replay_sha256, contract_sha256);
 CREATE INDEX IF NOT EXISTS idx_resume_path
     ON resume_state(replay_path, updated_at);
+CREATE INDEX IF NOT EXISTS idx_interlock_intervals_batch
+    ON interlock_intervals(batch_id, rule_id, state, start_epoch);
+CREATE INDEX IF NOT EXISTS idx_interlock_events_batch
+    ON interlock_events(batch_id, rule_id, start_ts);
 """

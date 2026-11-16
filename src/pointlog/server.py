@@ -8,11 +8,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+from .contract import ContractError, load_contract
 from .quality import quality_meta
 from .store import Store
 from .store_queries import (
     batch_list,
     batch_totals,
+    interlock_summary,
     issue_distribution,
     issue_rows,
     pending_recollect,
@@ -103,6 +105,50 @@ def _index_page(store: Store) -> bytes:
     return _layout("点位采录台 · 批次列表", body)
 
 
+def _interlock_html(store: Store, batch: dict[str, Any]) -> str:
+    """Render the read-only interlock section, or nothing if unavailable."""
+    try:
+        contract = load_contract(batch["contract_path"])
+    except (ContractError, OSError):
+        return ""
+    if not contract.interlocks:
+        return ""
+    summary = interlock_summary(store, batch["id"], contract)
+    rule_rows = [
+        [f"<code>{_e(item['rule_id'])}@v{_e(item['version'])}</code>",
+         _e(item["sampling"]),
+         _e(item["totals"]["proven_interlock_seconds"]),
+         _e(item["totals"]["proven_normal_seconds"]),
+         _e(item["totals"]["unknown_seconds"]),
+         _e(item["totals"]["event_count"])]
+        for item in summary["rules"]
+    ]
+    event_rows = [
+        [f"<code>{_e(item['rule_id'])}</code>", _e(item["start_ts"]),
+         _e(item["end_ts"]), _e(item["duration_seconds"]),
+         _e(item["peak_a"]), _e(item["peak_b"]),
+         _e(",".join(str(number) for number in item["line_numbers"]) or "-"),
+         _e(item["interruption_reason"])]
+        for rule in summary["rules"] for item in rule["events"]
+    ]
+    unknown_rows = [
+        [f"<code>{_e(item['rule_id'])}</code>", _e(item["start_ts"]),
+         _e(item["end_ts"]), _e(item["duration_seconds"]), _e(item["reason"]),
+         _e(",".join(str(number) for number in item["line_numbers"]) or "-")]
+        for rule in summary["rules"] for item in rule["unknown_intervals"]
+    ]
+    return (
+        "<h2>双点位持续联锁</h2>"
+        + _table(["规则", "采样语义", "已证联锁(s)", "已证正常(s)", "未知(s)", "事件"],
+                 rule_rows)
+        + "<h3>已证联锁事件</h3>"
+        + _table(["规则", "起始", "结束", "持续(s)", "峰值 A", "峰值 B", "行号", "中断"],
+                 event_rows)
+        + "<h3>未知缺口（不计为正常）</h3>"
+        + _table(["规则", "起始", "结束", "持续(s)", "原因", "行号"], unknown_rows)
+    )
+
+
 def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
     batch_id = batch["id"]
     totals = batch_totals(store, batch_id)
@@ -167,6 +213,7 @@ def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
 {_table(["问题码", "数量"], issue_rows_html)}
 <h2>待重采点位</h2>
 {_table(["设备", "点位", "问题码", "质量码", "次数", "行号"], pending_rows)}
+{_interlock_html(store, batch)}
 <h2>问题明细</h2>
 {_table(["行", "设备", "点位", "问题码", "质量码", "级别", "帧摘要", "说明"], issue_detail_rows)}
 <h2>问题帧列表</h2>

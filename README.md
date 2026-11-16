@@ -63,6 +63,7 @@ reports/summary.json            # 机器可读报告
 reports/summary.md              # 人读摘要
 reports/summary.html            # 自包含 HTML 报告
 reports/pending_recollect.csv   # 待重采点位清单
+reports/interlock_pending.csv   # 联锁未知缺口待复采清单
 ```
 
 演示 fixture 共 19 行：8 条正常读数、3 条量程/枚举质量异常、1 条异常应答、2 条 CRC 错误、1 条无契约、2 条帧结构问题、1 条重复行，以及 1 个契约中完全缺失的点位。一次完整采集得到 11 条读数记录（其中 8 条 `good`）、12 条问题记录和 7 个待重采点位。
@@ -182,6 +183,7 @@ python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR]
 python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
+python -m pointlog interlock BATCH_ID [--db PATH]
 python -m pointlog serve [--db PATH] [--port 5000]
 ```
 
@@ -195,6 +197,8 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `--stop-after` | 调试用，处理 N 行后模拟中断，便于验证续采 |
 | `--no-report` | 仅入库，不写报告 |
 
+`pointlog interlock BATCH_ID` 打印该批次各规则的三值时长、已证事件与未知缺口；`pointlog show` 也会附带联锁摘要。两者均为只读，不发任何控制命令。
+
 退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
 
 ## SQLite 台账
@@ -206,20 +210,51 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `readings` | 解码后的点位读数 | 设备、点位、时间戳、原始值、工程值、单位、质量码 |
 | `issues` | 问题明细与待重采标记 | 批次、行号、点位、问题码、帧摘要、说明、`pending_collect` |
 | `resume_state` | 续采状态 | 回放路径 + sha256、批次、已处理行偏移、总行数 |
+| `interlock_intervals` | 三值联锁时间线 | 规则、版本、状态、起止时间、原因、源行号 |
+| `interlock_events` | 已证持续联锁事件 | 事件键、起止、峰值、规则版本、源行号、中断原因 |
 | `schema_meta` | schema 版本 | `schema_version` |
 
 幂等策略：批次 ID 由回放 sha256 与契约 sha256 确定性生成；同一输入重跑会复用已完成批次，不新增帧或读数；读数在批次内以 `(batch_id, device_id, point_key, ts)` 唯一约束兜底。同批次重复行记为 `duplicate` 问题，不插入第二条读数。
 
 断点续采：每处理一行，帧/读数/问题与 `resume_state.line_offset` 在同一事务提交。`--resume` 校验当前回放 sha256 与状态一致；不一致时拒绝并提示创建新批次。若 `resume_state` 被删除，可从已有帧的最大行号重建偏移。
 
+## 双点位持续联锁
+
+单点读数只能回答“这个点位此刻是否越限”，不能回答“两路可信读数是否在同一时段持续同时越限”。契约可在设备下声明 `interlocks`，由 `src/pointlog/interlock.py` 在采集完成后做**完全离线**的三值时间线评估；不发送任何设备控制命令，也不把未知当成正常。
+
+```yaml
+    interlocks:
+      - id: line_a_pressure_level    # 规则 ID，全局唯一
+        version: 1                   # 规则版本，写入每个事件
+        points:
+          - {key: line_a_pressure, threshold: 150, direction: above}
+          - {key: line_a_level, threshold: 2.5, direction: above}
+        min_duration_minutes: 2      # 最短持续门槛
+        max_stale_minutes: 5         # 有界保持模式下样本的最大陈旧时间
+        sampling: bounded_hold       # 或 strict_simultaneous
+```
+
+- 两个 `point_key` 必须属于声明规则的同一设备；比较方向为 `above`（>，可加 `inclusive: true` 变 `>=`）或 `below`（<，`inclusive` 变 `<=`）。
+- **只用可信读数**：帧结构、请求/应答 CRC、解码、量程/枚举全部通过且时间戳可解析的 `good` reading；其余带不可信数值的可归属帧（坏 CRC、坏帧、异常应答、溢出、欠量程、解码失败、矛盾值）都是“坏证据”，会阻断保持。空洞应答（`missing_response`）只是“没有新样本”，有界保持可继续到下一样本或陈旧上限。
+- **三值区间**：两路同时为真 → `true`；至少一路明确为假 → `false`；其余（含坏证据、矛盾值、样本过期、无同刻样本）→ `unknown`。未知**不计为正常**。
+- 同一时刻既有多条互相矛盾的 `good` 值、或可信值与坏帧同刻，该时刻不可判定，标 `unknown` 并指向行号。
+- 只有在连续 `true` 覆盖不少于 `min_duration_minutes` 时才产生一条事件；短暂正常值、坏帧、缺口、陈旧到期都会中断持续时钟，两次离散高值不会被相加。
+- 事件包含起止时间、两路峰值及峰值时间、规则版本、源 reading 行号、中断原因与中断行号。
+- **`bounded_hold`**：各点最近可信样本在陈旧窗口内延续到下一样本、过期或坏证据时刻；不跨越坏帧与明确正常值。
+- **`strict_simultaneous`**：只在两点同一时间戳都有可信样本的时刻确认状态，不推断离散观测之间的持续时间，因此正的最短持续门槛下不会宣称事件，而是列出已确认时刻与未知区间。
+- 同一 `replay_sha256` / `contract_sha256` 下事件键由规则、版本、语义与起止时间决定；乱序输入、重复行、续采和重跑都会得到相同事件，且以整批替换方式幂等落库，不重复插入。
+
+合成演示的两模式对比：温度 00:00 越限、00:04 恢复正常，压力 00:02 越限、00:06 恢复正常，陈旧上限 5 分钟且持续门槛 2 分钟。`bounded_hold` 给出 00:02—00:04 的联锁事件；`strict_simultaneous` 因无同刻双点样本不宣称事件，并把整个窗口列为未知。两者在同一证据下的结论不同，但都符合各自被授权的采样语义。
+
 ## 报告
 
-每次完整采集写入四个文件：
+每次完整采集写入五个文件：
 
-- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单。
-- `reports/summary.md`：人读摘要，包含同样的表格。
+- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单，以及 `interlock` 三值区间/事件与 `interlock_pending_recollect` 未知缺口。
+- `reports/summary.md`：人读摘要，包含同样的表格，并增加“双点位持续联锁”章节。
 - `reports/summary.html`：自包含 HTML，内联 CSS，不引用 CDN、外部字体、脚本或图片。
-- `reports/pending_recollect.csv`：按设备/点位/问题码聚合的待重采清单。
+- `reports/pending_recollect.csv`：按设备/点位/问题码聚合的待重采清单（单点质量口径不变）。
+- `reports/interlock_pending.csv`：联锁未知缺口待复采清单，单独列出，不与单点质量混算。
 
 同一输入重复运行时，除首次批次时间外报告内容稳定；golden 测试覆盖 JSON 字段顺序、Markdown 关键片段、HTML 无外部资源和 CSV 结构。仓库中的 `reports/` 是一次演示采集的样例输出。
 
@@ -231,6 +266,7 @@ python -m pointlog serve --port 5000
 
 - 固定绑定 `127.0.0.1`，不接受自定义外部网卡。
 - 批次列表、批次详情、质量码分布、问题明细、问题帧列表、待重采点位。
+- 批次详情包含只读的双点位联锁三值汇总、已证事件与未知缺口；契约不可读时该节静默省略。
 - 仅实现 GET；POST/PUT/PATCH/DELETE/HEAD/OPTIONS 均返回 `405` 和 `Allow: GET`。
 - 未知路径或不存在批次返回 `404`。
 - 不提供写入、删除、上传或配置修改接口。

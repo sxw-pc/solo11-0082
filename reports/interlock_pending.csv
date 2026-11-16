@@ -1,0 +1,3 @@
+device_id,point_key,rule_id,rule_version,issue_code,state,start_ts,end_ts,reason,line_numbers,detail
+line-a,line_a_pressure+line_a_level,line_a_pressure_level,1,interlock_unknown,unknown,2025-03-01T00:00:20Z,2025-03-01T00:00:30Z,insufficient_evidence,5,interlock line_a_pressure_level v1 bounded_hold: 2025-03-01T00:00:20Z..2025-03-01T00:00:30Z unknown (insufficient_evidence); cannot classify as normal
+line-a,line_a_pressure+line_a_level,line_a_pressure_level,1,interlock_unknown,unknown,2025-03-01T00:01:05Z,2025-03-01T00:01:15Z,bad_evidence,5;14,interlock line_a_pressure_level v1 bounded_hold: 2025-03-01T00:01:05Z..2025-03-01T00:01:15Z unknown (bad_evidence); cannot classify as normal
