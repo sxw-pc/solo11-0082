@@ -213,3 +213,25 @@ def batch_totals(store: Store, batch_id: str) -> dict[str, int]:
         "issues": int(issue_count),
         "pending_points": pending_point_count(store, batch_id),
     }
+
+
+def pairing_stats(store: Store, batch_id: str) -> dict[str, Any]:
+    """Split-frame pairing evidence totals; every reading traces to these."""
+    rows = store.conn.execute(
+        "SELECT outcome, COUNT(*) AS n FROM pair_events WHERE batch_id = ? "
+        "GROUP BY outcome ORDER BY outcome",
+        (batch_id,),
+    ).fetchall()
+    outcomes = {row["outcome"]: int(row["n"]) for row in rows}
+    events = sum(outcomes.values())
+    unresolved = store.conn.execute(
+        "SELECT COUNT(*) FROM pair_events WHERE batch_id = ? "
+        "AND outcome NOT IN ('paired')",
+        (batch_id,),
+    ).fetchone()[0]
+    return {
+        "events": int(events),
+        "paired_events": int(outcomes.get("paired", 0)),
+        "unresolved_events": int(unresolved),
+        "outcomes": outcomes,
+    }

@@ -6,11 +6,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .schema import SCHEMA_SQL, SCHEMA_VERSION
+from .schema import MIGRATIONS, SCHEMA_SQL, SCHEMA_VERSION
 
 
-def make_batch_id(replay_sha256: str, contract_sha256: str) -> str:
-    return f"b_{replay_sha256[:12]}_{contract_sha256[:12]}"
+def make_batch_id(
+    replay_sha256: str, contract_sha256: str, mode_fingerprint: str = ""
+) -> str:
+    base = f"b_{replay_sha256[:12]}_{contract_sha256[:12]}"
+    if mode_fingerprint:
+        return f"{base}_{mode_fingerprint[:8]}"
+    return base
 
 
 class Store:
@@ -30,8 +35,18 @@ class Store:
 
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
+        for table, column, ddl in MIGRATIONS:
+            columns = {
+                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")
+            }
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         self.conn.execute(
             "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
+        self.conn.execute(
+            "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
             (str(SCHEMA_VERSION),),
         )
         self.conn.commit()
@@ -53,18 +68,23 @@ class Store:
         row = self.conn.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
         return self._dict(row)
 
-    def find_batch(self, replay_sha256: str, contract_sha256: str) -> dict[str, Any] | None:
+    def find_batch(
+        self, replay_sha256: str, contract_sha256: str, mode_fingerprint: str = ""
+    ) -> dict[str, Any] | None:
         row = self.conn.execute(
-            "SELECT * FROM batches WHERE replay_sha256 = ? AND contract_sha256 = ?",
-            (replay_sha256, contract_sha256),
+            "SELECT * FROM batches WHERE replay_sha256 = ? AND contract_sha256 = ? "
+            "AND mode_fingerprint = ?",
+            (replay_sha256, contract_sha256, mode_fingerprint),
         ).fetchone()
         return self._dict(row)
 
-    def find_latest_batch_for_path(self, replay_path: str) -> dict[str, Any] | None:
+    def find_latest_batch_for_path(
+        self, replay_path: str, mode_fingerprint: str = ""
+    ) -> dict[str, Any] | None:
         row = self.conn.execute(
-            "SELECT * FROM batches WHERE replay_path = ? "
+            "SELECT * FROM batches WHERE replay_path = ? AND mode_fingerprint = ? "
             "ORDER BY started_at DESC, id DESC LIMIT 1",
-            (replay_path,),
+            (replay_path, mode_fingerprint),
         ).fetchone()
         return self._dict(row)
 
@@ -78,13 +98,20 @@ class Store:
         contract_sha256: str,
         started_at: str,
         total_lines: int,
+        replay_mode: str = "pairs",
+        pairing_route: str = "",
+        pair_timeout_ms: int = 0,
+        mode_fingerprint: str = "",
     ) -> dict[str, Any]:
         self.conn.execute(
             "INSERT OR IGNORE INTO batches("
             "id, replay_path, replay_sha256, contract_path, contract_sha256, "
-            "started_at, status, total_lines) VALUES(?,?,?,?,?,?,'partial',?)",
+            "started_at, status, total_lines, replay_mode, pairing_route, "
+            "pair_timeout_ms, mode_fingerprint) "
+            "VALUES(?,?,?,?,?,?,'partial',?,?,?,?,?)",
             (batch_id, replay_path, replay_sha256, contract_path, contract_sha256,
-             started_at, total_lines),
+             started_at, total_lines, replay_mode, pairing_route, pair_timeout_ms,
+             mode_fingerprint),
         )
         self.conn.commit()
         batch = self.get_batch(batch_id)
@@ -100,12 +127,14 @@ class Store:
         batch_id: str,
         total_lines: int,
         updated_at: str,
+        mode_fingerprint: str = "",
     ) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO resume_state("
-            "replay_path, replay_sha256, batch_id, line_offset, total_lines, updated_at) "
-            "VALUES(?,?,?,0,?,?)",
-            (replay_path, replay_sha256, batch_id, total_lines, updated_at),
+            "replay_path, replay_sha256, batch_id, line_offset, total_lines, "
+            "updated_at, mode_fingerprint) VALUES(?,?,?,0,?,?,?)",
+            (replay_path, replay_sha256, batch_id, total_lines, updated_at,
+             mode_fingerprint),
         )
         self.conn.commit()
 
@@ -118,15 +147,19 @@ class Store:
         line_offset: int,
         total_lines: int,
         updated_at: str,
+        mode_fingerprint: str = "",
     ) -> None:
         with self.conn:
             self.conn.execute(
                 "INSERT INTO resume_state("
-                "replay_path, replay_sha256, batch_id, line_offset, total_lines, updated_at) "
-                "VALUES(?,?,?,?,?,?) ON CONFLICT(replay_path, replay_sha256) DO UPDATE SET "
+                "replay_path, replay_sha256, batch_id, line_offset, total_lines, "
+                "updated_at, mode_fingerprint) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(replay_path, replay_sha256) DO UPDATE SET "
                 "batch_id=excluded.batch_id, line_offset=excluded.line_offset, "
-                "total_lines=excluded.total_lines, updated_at=excluded.updated_at",
-                (replay_path, replay_sha256, batch_id, line_offset, total_lines, updated_at),
+                "total_lines=excluded.total_lines, updated_at=excluded.updated_at, "
+                "mode_fingerprint=excluded.mode_fingerprint",
+                (replay_path, replay_sha256, batch_id, line_offset, total_lines,
+                 updated_at, mode_fingerprint),
             )
 
     def get_resume_state(self, replay_path: str, replay_sha256: str):
@@ -223,11 +256,93 @@ class Store:
         return {row["point_key"] for row in rows if row["point_key"]}
 
     def max_processed_line(self, batch_id: str) -> int:
+        # pair_events carries one row per replay line in events mode, where a
+        # line may legitimately produce no frame row; frames alone would
+        # under-report the committed offset there.
         row = self.conn.execute(
-            "SELECT COALESCE(MAX(line_no), 0) AS n FROM frames WHERE batch_id = ?",
-            (batch_id,),
+            "SELECT COALESCE(MAX(line_no), 0) AS n FROM ("
+            "SELECT line_no FROM frames WHERE batch_id = ? "
+            "UNION SELECT line_no FROM pair_events WHERE batch_id = ?)",
+            (batch_id, batch_id),
         ).fetchone()
         return int(row["n"])
+
+    def save_event_outcomes(
+        self,
+        *,
+        batch_id: str,
+        event_row: dict[str, Any] | None,
+        event_updates: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        issues: list[dict[str, Any]],
+        reading: dict[str, Any] | None,
+        state_key: tuple[str, str],
+        line_offset: int,
+        total_lines: int,
+        updated_at: str,
+    ) -> None:
+        """Persist one split-frame event's outcomes and the offset in one transaction."""
+        replay_path, replay_sha256 = state_key
+        with self.conn:
+            if event_row is not None:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO pair_events("
+                    "batch_id, line_no, ts, channel, direction, frame_hex, pair_id, "
+                    "timeout_ms, event_sha256, outcome, paired_line_no, detail) "
+                    "VALUES(:batch_id,:line_no,:ts,:channel,:direction,:frame_hex,"
+                    ":pair_id,:timeout_ms,:event_sha256,:outcome,:paired_line_no,"
+                    ":detail)",
+                    {"batch_id": batch_id, **event_row},
+                )
+            for update in event_updates:
+                self.conn.execute(
+                    "UPDATE pair_events SET outcome = ?, paired_line_no = ? "
+                    "WHERE batch_id = ? AND line_no = ?",
+                    (update["outcome"], update.get("paired_line_no"),
+                     batch_id, update["line_no"]),
+                )
+            for frame in frames:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO frames("
+                    "batch_id, line_no, ts, source, request_hex, response_hex, "
+                    "request_crc_ok, response_crc_ok, slave_id, function_code, "
+                    "start_address, register_count, device_id, point_key, "
+                    "contract_matched, quality_code, issue_code, detail, "
+                    "channel, direction, pair_id, pair_route, "
+                    "request_line_no, response_line_no, request_sha256, "
+                    "response_sha256) "
+                    "VALUES(:batch_id,:line_no,:ts,:source,:request_hex,:response_hex,"
+                    ":request_crc_ok,:response_crc_ok,:slave_id,:function_code,"
+                    ":start_address,:register_count,:device_id,:point_key,"
+                    ":contract_matched,:quality_code,:issue_code,:detail,"
+                    ":channel,:direction,:pair_id,:pair_route,"
+                    ":request_line_no,:response_line_no,:request_sha256,"
+                    ":response_sha256)",
+                    {"batch_id": batch_id, **frame},
+                )
+            for issue in issues:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO issues("
+                    "batch_id, line_no, device_id, point_key, issue_code, "
+                    "quality_code, severity, frame_summary, detail, ts, pending_collect) "
+                    "VALUES(:batch_id,:line_no,:device_id,:point_key,:issue_code,"
+                    ":quality_code,:severity,:frame_summary,:detail,:ts,:pending_collect)",
+                    {"batch_id": batch_id, **issue},
+                )
+            if reading is not None:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO readings("
+                    "batch_id, device_id, point_key, ts, line_no, raw_value, "
+                    "engineering_value, unit, quality_code, enum_label, source) "
+                    "VALUES(:batch_id,:device_id,:point_key,:ts,:line_no,:raw_value,"
+                    ":engineering_value,:unit,:quality_code,:enum_label,:source)",
+                    {"batch_id": batch_id, **reading},
+                )
+            self.conn.execute(
+                "UPDATE resume_state SET line_offset = ?, total_lines = ?, updated_at = ? "
+                "WHERE replay_path = ? AND replay_sha256 = ?",
+                (line_offset, total_lines, updated_at, replay_path, replay_sha256),
+            )
 
     def refresh_batch_stats(
         self,

@@ -15,13 +15,13 @@
 | --- | --- | --- |
 | `cli.py` | 参数解析、错误码映射、命令输出 | 业务解码、SQL |
 | `fixtures_gen.py` | 确定性生成合成回放 | 采集、报表 |
-| `replay.py` | JSONL 指纹、逐行解析、字段校验 | 帧语义、契约匹配 |
+| `replay.py` | JSONL 指纹、逐行/逐事件解析、字段校验 | 帧语义、契约匹配 |
 | `modbus.py` | 请求/应答帧结构、CRC 标志、异常帧 | 工程值、量程 |
 | `crc.py` | CRC-16/MODBUS | 帧结构 |
 | `contract.py` | YAML 契约 schema 与静态校验 | 帧解析 |
 | `codec.py` | 寄存器字节序、类型、缩放、枚举 | 数据库、质量优先级 |
 | `quality.py` | 质量码目录、优先级、待重采属性 | I/O |
-| `lineproc.py` | 单行帧级到读数级处理 | 批次生命周期 |
+| `lineproc.py` | 单行帧级到读数级处理、分离帧配对状态机 | 批次生命周期 |
 | `pipeline.py` | 批次、续采、提交、完成/失败状态 | HTTP、报告排版 |
 | `store.py` | SQLite schema、事务写入、续采状态 | 聚合展示 |
 | `store_queries.py` | 报告/复核台只读聚合 | 写操作 |
@@ -63,10 +63,11 @@ replay JSONL ──sha256──> pipeline ──逐行──> lineproc
 批次 ID 为：
 
 ```text
-b_<replay_sha256[:12]>_<contract_sha256[:12]>
+b_<replay_sha256[:12]>_<contract_sha256[:12]>            # pairs 模式
+b_<replay_sha256[:12]>_<contract_sha256[:12]>_<mode[:8]> # events 模式
 ```
 
-同一回放内容 + 同一契约内容必然得到同一批次 ID。再次运行同一命令时：
+其中 `mode` 是回放模式、配对路线与配对超时的指纹。同一回放内容 + 同一契约内容 + 同一配对配置必然得到同一批次 ID；同一文件用不同配对路线运行会得到不同批次。再次运行同一命令时：
 
 - 若批次已 `completed`，直接复用，不重新解析回放行，不新增帧/读数。
 - 若批次为 `partial`/`failed`，普通运行拒绝并要求使用 `--resume`，避免静默覆盖半成品。
@@ -120,7 +121,26 @@ UNIQUE (batch_id, device_id, point_key, ts)
 
 为了在续采后仍能正确判断“是否出现过请求”，`frames.contract_matched` 和 `point_key` 会持久化；续采开始时从已提交帧恢复已见点位集合。
 
-## 7. 质量判定与问题记录
+## 7. 分离帧配对（events 模式）
+
+`--replay-mode events` 处理“请求帧、响应帧分行记录”的离线串口录制。每行事件声明 UTC 时间、通道、方向、帧十六进制、可选 `pair_id` 与可选 `timeout_ms`。默认 `pairs` 模式行为不变。
+
+**配对状态机**（`lineproc.EventPairer`）按通道分状态、按文件行序推进，是事件流的纯函数：
+
+- 请求事件先经过与成对模式一致的帧结构、CRC、契约匹配检查；失败立即成为帧级证据，不进入在途集合。
+- 每个请求携带声明超时（事件 `timeout_ms`，缺省为运行参数 `--pair-timeout-ms`）；通道内出现更新事件时，先结算已过期的请求（`pair_timeout`），再处理当前事件。
+- 超时请求在一个额外超时窗口内保留为“迟到候选”，使迟到应答被识别为证据而非被猜测；超过窗口后移出候选（有界单在途）。
+
+两条均有业务授权的配对路线：
+
+- `explicit`：只接受同通道、同 `pair_id` 的请求—应答对。标识在同一通道内必须唯一；重复标识、应答早于请求、应答落在声明超时之后都留下问题证据。无标识事件保留为未决（`unpaired_event`），不做顺序推断。
+- `single_in_flight`：应答到达时，通道内恰好只有一个字节兼容（从站/功能码/寄存器长度，异常帧按既有格式）的在途请求、且没有迟到候选竞争时，从顺序推断配对。两个并发候选或超时迟到歧义一律写 `pair_ambiguous` 证据（含候选行号与哈希），绝不用最近请求或 FIFO 猜读数。
+
+成功配对把两条事件合成后交给既有 `process_line()`，完整沿用帧级质量优先级；帧记录写明两条事件的来源行号与 SHA-256。异常应答按既有异常帧格式与请求关联，但不产生读数。失败与未决事件只进 `frames`/`issues`/`pair_events`，不进 `readings`；报告统计因此完全由配对结果驱动。
+
+**台账与恢复**：`pair_events` 每事件一行（含事件哈希与配对结局），`frames` 增加通道/方向/配对证据列。配对模式、路线与超时计入批次指纹（`mode_fingerprint`），同一文件不同路线得到不同批次。续采时按事件流重放已提交前缀（只重建状态、不写库），已超时请求不会在恢复边界被当作新请求；`pair_events` 每行一条使偏移修复精确到已提交事件。
+
+## 8. 质量判定与问题记录
 
 `quality.py` 的 `determine_quality()` 是唯一质量判定入口。`frames.quality_code` 表示该行的最终质量；`readings.quality_code` 保存实际写入读数的质量。`issues` 同时保存更具体的问题码（如 `truncated_frame`、`slave_mismatch`）与对应的质量问题码（如 `bad_frame`）。
 
@@ -128,7 +148,7 @@ UNIQUE (batch_id, device_id, point_key, ts)
 
 完整顺序见 [QUALITY_CODES.md](QUALITY_CODES.md)。
 
-## 8. 确定性策略
+## 9. 确定性策略
 
 - fixture 使用固定种子式常量与固定基础时间，不使用随机数和当前时间。
 - 浮点解码显式使用大端 `struct` 格式，不依赖宿主机字节序。
@@ -137,7 +157,7 @@ UNIQUE (batch_id, device_id, point_key, ts)
 - JSON 使用固定字段插入顺序；质量码分布按目录顺序输出。
 - 报告不含生成时刻，只有批次开始/结束时间；复用批次时报告字节稳定。
 
-## 9. 只读复核台
+## 10. 只读复核台
 
 `server.py` 使用标准库 `http.server`，`create_server()` 固定绑定 `127.0.0.1`。每个 GET 请求打开 SQLite `mode=ro` 连接；路由只接受：
 
@@ -146,7 +166,7 @@ UNIQUE (batch_id, device_id, point_key, ts)
 
 未知路径 404；任何非 GET 方法 405 且返回 `Allow: GET`。页面 CSS 内联，无脚本、无外部资源，不包含任何写入/删除/上传接口。
 
-## 10. 明确取舍
+## 11. 明确取舍
 
 - 一个请求只匹配一个契约点：使用 `(slave_id, function, start, count)` 精确匹配，避免“一个多寄存器响应拆多个点位”的歧义。
 - 重复读数不插入，而不是插入一条 `duplicate` 读数，以保持读数表幂等性；`duplicate` 仍出现在帧质量、问题表和待重采之外的分布中。

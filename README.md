@@ -88,6 +88,36 @@ reports/pending_recollect.csv   # 待重采点位清单
 
 真实 fixture 由 `scripts/make_fixtures.py`（或 `python -m pointlog fixtures`）确定性生成，重复生成字节一致。
 
+## 分离帧回放（events 模式）
+
+有些离线串口录制把请求帧和响应帧分别写成事件，无法预先整理成一行一对。`--replay-mode events` 按事件逐行处理这种文件，并在台账中产出可信配对或可解释的未决问题；默认的 `pairs` 一行一对模式行为不变。
+
+每行一个事件对象：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `ts` | string | 是 | ISO 8601 UTC 时间戳（可解析，用于超时判定） |
+| `channel` | string | 是 | 采集通道标识；配对只在同一通道内进行 |
+| `direction` | string | 是 | `request` 或 `response` |
+| `frame_hex` | string | 是 | 该方向上的帧十六进制字符串 |
+| `pair_id` | string | 否 | 显式配对标识；同一通道内必须唯一 |
+| `timeout_ms` | integer | 否 | 该请求声明的配对超时（毫秒），缺省用 `--pair-timeout-ms` |
+| `source` | string | 否 | 来源标识，缺省取通道名 |
+
+两条均有业务授权的配对路线（`--pairing-route`）：
+
+- `explicit`（默认）：只接受请求与响应携带一致 `pair_id` 的事件对；没有标识的事件保留为未决证据，不做任何顺序推断。
+- `single_in_flight`：在一个通道的时间窗内只有一个未完成请求、且没有超时迟到歧义时，允许从顺序推断配对。
+
+两条路线都遵守：跨通道不可配对；正常配对仍须通过既有 CRC、从站/功能码和寄存器长度校验；异常应答只与请求关联、不产生读数；重复标识、响应早于请求、响应落在声明超时之后都会留下问题证据；两个并发候选或超时迟到歧义时不允许用“最近请求”或 FIFO 猜读数，原始事件、候选请求与不确定原因全部留在台账。超时请求在一个额外超时窗口内仍是“迟到候选”，超过该窗口后不再毒化后续配对（有界单在途）。
+
+```bash
+python -m pointlog run --replay events.jsonl --replay-mode events \
+  --pairing-route explicit --pair-timeout-ms 1000
+```
+
+配对模式、路线与超时计入批次指纹；同一文件用不同路线运行会得到不同批次。断点续采按事件流确定性重放已提交前缀来重建配对状态，已超时请求不会在恢复边界被当作新请求。
+
 ## 点位契约（YAML）
 
 契约在采集开始前加载并静态校验；任何错误都会在创建批次前失败，并输出稳定错误码。演示契约见 `config/points.yaml`，其中包含全部数据类型和字节序组合。

@@ -18,6 +18,11 @@
 | `overflow` | 工程值高于量程上限 | warning | 否 |
 | `under_range` | 工程值低于量程下限 | warning | 否 |
 | `not_in_enum` | 原始值不在枚举映射中 | warning | 否 |
+| `pair_timeout` | 分离帧请求在声明超时内没有可用应答 | warning | 是 |
+| `pair_ambiguous` | 分离帧应答与多个候选请求字节不可区分 | error | 是 |
+| `unpaired_event` | 事件在当前配对路线下无法配对 | warning | 是 |
+| `duplicate_pair_id` | 显式配对标识在同一通道内被复用 | error | 是 |
+| `pair_order_inverted` | 显式配对应答的时间戳早于请求 | error | 是 |
 
 “进入待重采”是报告与 CSV 的输出规则，不影响入库。`overflow`、`under_range`、`not_in_enum` 的帧和 CRC 正常，通常需要核对量程/枚举配置；`duplicate` 不需要重采；`no_contract` 没有可归属点位。
 
@@ -122,6 +127,16 @@
 ### `not_in_enum`
 
 点位声明了非空枚举，且原始寄存器整数值不在映射中。读数仍写入，`enum_label` 为空，质量码 `not_in_enum`，不进入待重采。量程问题优先于枚举问题。
+
+### 分离帧配对质量码（events 模式）
+
+以下质量码只出现在分离帧回放（`--replay-mode events`）的配对结果中；它们不参与 `determine_quality()` 的帧级优先级，而是由配对状态机直接判定。成功配对本身仍完整沿用第 2 节的既有质量优先级。
+
+- `pair_timeout`：请求在声明超时（事件 `timeout_ms` 或运行参数默认值）内没有可用应答，包括录制结束时仍未决的请求（问题码 `pair_incomplete`）以及迟到应答的两侧证据（问题码 `late_response`）。
+- `pair_ambiguous`：应答在字节上无法区分地匹配多个候选请求（并发在途或超时迟到）。不允许用最近请求或 FIFO 猜测，候选请求行号与哈希写入问题明细。
+- `unpaired_event`：显式路线下事件缺少或未匹配 `pair_id`，或应答在任何通道内都没有候选请求（问题码 `orphan_response`）。未决事件不产生读数，也不算独立采样。
+- `duplicate_pair_id`：同一通道内两个请求事件复用同一显式标识；后到的请求事件不被跟踪。
+- `pair_order_inverted`：显式配对的应答时间戳早于请求时间戳；该配对被拒绝。
 
 ## 5. 分布统计口径
 

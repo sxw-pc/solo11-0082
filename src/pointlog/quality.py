@@ -16,6 +16,11 @@ DECODE_ERROR = "decode_error"
 OVERFLOW = "overflow"
 UNDER_RANGE = "under_range"
 NOT_IN_ENUM = "not_in_enum"
+PAIR_TIMEOUT = "pair_timeout"
+PAIR_AMBIGUOUS = "pair_ambiguous"
+UNPAIRED_EVENT = "unpaired_event"
+DUPLICATE_PAIR_ID = "duplicate_pair_id"
+PAIR_ORDER_INVERTED = "pair_order_inverted"
 
 QUALITY_ORDER = (
     GOOD,
@@ -30,6 +35,11 @@ QUALITY_ORDER = (
     OVERFLOW,
     UNDER_RANGE,
     NOT_IN_ENUM,
+    PAIR_TIMEOUT,
+    PAIR_AMBIGUOUS,
+    UNPAIRED_EVENT,
+    DUPLICATE_PAIR_ID,
+    PAIR_ORDER_INVERTED,
 )
 
 QUALITY_META: dict[str, dict[str, object]] = {
@@ -92,6 +102,34 @@ QUALITY_META: dict[str, dict[str, object]] = {
         "severity": "warning",
         "pending_recollect": False,
         "description": "raw enum value is absent from the configured mapping",
+    },
+    PAIR_TIMEOUT: {
+        "severity": "warning",
+        "pending_recollect": True,
+        "description": "split-frame request had no matching response within its "
+                       "declared timeout",
+    },
+    PAIR_AMBIGUOUS: {
+        "severity": "error",
+        "pending_recollect": True,
+        "description": "split-frame response matches more than one candidate "
+                       "request; no inference is allowed",
+    },
+    UNPAIRED_EVENT: {
+        "severity": "warning",
+        "pending_recollect": True,
+        "description": "split-frame event could not be paired under the active "
+                       "pairing route",
+    },
+    DUPLICATE_PAIR_ID: {
+        "severity": "error",
+        "pending_recollect": True,
+        "description": "explicit pair identifier reused within one channel",
+    },
+    PAIR_ORDER_INVERTED: {
+        "severity": "error",
+        "pending_recollect": True,
+        "description": "paired response timestamp predates its request",
     },
 }
 

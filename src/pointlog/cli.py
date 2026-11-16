@@ -43,6 +43,8 @@ def _print_result(result: RunResult) -> None:
     suffix = f" ({', '.join(flags)})" if flags else ""
     print(f"批次:         {result.batch_id}{suffix}")
     print(f"状态:         {result.status}")
+    if result.replay_mode != "pairs":
+        print(f"回放模式:     {result.replay_mode} (配对路线: {result.pairing_route})")
     print(f"处理行数:     {result.processed_lines}/{result.total_lines}")
     print(f"读数记录:     {result.reading_count}")
     print(f"有效读数:     {result.valid_readings}")
@@ -60,6 +62,9 @@ def _run_capture_command(args: argparse.Namespace) -> int:
         reports_dir=None if args.no_report else args.reports,
         resume=args.resume,
         stop_after=args.stop_after,
+        replay_mode=args.replay_mode,
+        pairing_route=args.pairing_route,
+        pair_timeout_ms=args.pair_timeout_ms,
     )
     _print_result(result)
     return 0
@@ -171,6 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", action="store_true", help="从已记录的行偏移断点续采")
     run.add_argument("--stop-after", type=int, default=None,
                      help="调试用：处理 N 行后模拟中断")
+    run.add_argument("--replay-mode", choices=("pairs", "events"), default="pairs",
+                     help="pairs=一行一对帧；events=请求/响应分离事件")
+    run.add_argument("--pairing-route", choices=("explicit", "single_in_flight"),
+                     default="explicit",
+                     help="分离帧配对路线：explicit=仅显式配对标识；"
+                          "single_in_flight=有界单在途顺序推断")
+    run.add_argument("--pair-timeout-ms", type=int, default=1000,
+                     help="分离帧默认配对超时（毫秒），事件可单独覆盖")
     run.set_defaults(func=_run_capture_command)
 
     fixtures = sub.add_parser("fixtures", help="确定性重新生成 fixture")

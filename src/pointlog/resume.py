@@ -30,6 +30,7 @@ def plan_resume(
     *,
     contract_sha256: str,
     now: str,
+    mode_fingerprint: str = "",
 ) -> ResumePlan:
     replay_path = str(replay.path.resolve())
     current_sha = replay.sha256
@@ -37,6 +38,12 @@ def plan_resume(
     path_states = store.list_resume_states(replay_path)
 
     if state is not None:
+        if str(state.get("mode_fingerprint") or "") != mode_fingerprint:
+            raise ResumeRejected(
+                "pairing_changed",
+                "pairing mode/route differs from the recorded resume state; "
+                "rerun with the same pairing parameters or use a new output database",
+            )
         batch = store.get_batch(state["batch_id"])
         if batch is None:
             raise ResumeRejected(
@@ -69,6 +76,7 @@ def plan_resume(
                 line_offset=offset,
                 total_lines=replay.total_lines,
                 updated_at=now,
+                mode_fingerprint=mode_fingerprint,
             )
             repaired = True
         return ResumePlan(batch=batch, offset=offset, state_found=True,
@@ -83,7 +91,7 @@ def plan_resume(
             "create a new batch instead of resuming",
         )
 
-    batch = store.find_latest_batch_for_path(replay_path)
+    batch = store.find_latest_batch_for_path(replay_path, mode_fingerprint)
     if batch is None:
         raise ResumeRejected(
             "no_resume_state", "no resume state or prior batch exists for this replay path"
@@ -106,6 +114,7 @@ def plan_resume(
         line_offset=offset,
         total_lines=replay.total_lines,
         updated_at=now,
+        mode_fingerprint=mode_fingerprint,
     )
     return ResumePlan(batch=batch, offset=offset, state_found=False,
                       state_repaired=True)
