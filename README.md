@@ -177,8 +177,9 @@ devices:
 ## CLI 命令
 
 ```bash
-python -m pointlog demo [--contract PATH] [--fixture PATH] [--db PATH] [--reports DIR]
-python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR] [--no-report] [--resume] [--stop-after N]
+python -m pointlog demo [--contract PATH] [--fixture PATH] [--db PATH] [--reports DIR] [--derived-config PATH]
+python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR] [--no-report] [--resume] [--stop-after N] [--derived-config PATH]
+python -m pointlog derive BATCH_ID --contract PATH --derived-config PATH [--db PATH] [--reports DIR]
 python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
@@ -189,6 +190,7 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | --- | --- |
 | `--replay` | 回放 JSONL 路径 |
 | `--contract` | 点位契约 YAML 路径 |
+| `--derived-config` | 虚拟测点 YAML 契约；缺省不计算虚拟测点，详见 [docs/DERIVED.md](docs/DERIVED.md) |
 | `--db` | SQLite 台账路径，默认 `var/pointlog.db` |
 | `--reports` | 报告目录，默认 `reports/` |
 | `--resume` | 按回放文件指纹与已处理行偏移续采 |
@@ -196,6 +198,17 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `--no-report` | 仅入库，不写报告 |
 
 退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
+
+## 离线虚拟测点
+
+只有电压、电流等原始点位时，可用虚拟测点离线计算功率等派生量，并把**数值、量纲、来源质量与误差范围**一起作为可复核结果。表达式是同一设备、同一采样时刻上原始点或上游虚拟点的 DAG，支持加减乘除、每个输入的绝对误差与单位维度；启动前拒绝循环、跨设备引用、维度不相容加减、除数可能跨零、offset 单位（如 degC）直接相乘以及输出单位维度不符。
+
+两种授权误差语义在台账与报告中显式标注，绝不混称：
+
+- `guaranteed`：区间运算，界限对任意允许输入都成立。
+- `independent`：一阶独立随机误差传播，给出 **1σ 估计**区间，不提供必然保证。
+
+例：`10±1 V × 2±0.2 A` 中心值均为 20 W；保证界限为 16.2–24.2 W（对 23 W 阈值判为“可能越限”），独立 1σ 约 17.17–22.83 W（估计范围内未越限）。来源缺失、CRC/解码不合格、同时刻矛盾值或非有限数时输出为**不可判**并写明原因，不产生看似精确的虚拟读数。完整规则见 [docs/DERIVED.md](docs/DERIVED.md)。
 
 ## SQLite 台账
 
@@ -206,20 +219,24 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `readings` | 解码后的点位读数 | 设备、点位、时间戳、原始值、工程值、单位、质量码 |
 | `issues` | 问题明细与待重采标记 | 批次、行号、点位、问题码、帧摘要、说明、`pending_collect` |
 | `resume_state` | 续采状态 | 回放路径 + sha256、批次、已处理行偏移、总行数 |
-| `schema_meta` | schema 版本 | `schema_version` |
+| `derived_contracts` | 虚拟测点契约文档 | 文档指纹、表达式版本、默认误差语义 |
+| `derived_points` | 虚拟点静态定义 | 表达式、维度、输入绝对误差、单位、阈值 |
+| `derived_readings` | 可复核虚拟读数 | 表达式版本、来源 point_key/reading 行号、数值、单位、误差范围、阈值状态、不可判原因 |
+| `schema_meta` | schema 版本 | `schema_version`（当前 2；旧库打开时自动补建虚拟测点表） |
 
-幂等策略：批次 ID 由回放 sha256 与契约 sha256 确定性生成；同一输入重跑会复用已完成批次，不新增帧或读数；读数在批次内以 `(batch_id, device_id, point_key, ts)` 唯一约束兜底。同批次重复行记为 `duplicate` 问题，不插入第二条读数。
+幂等策略：批次 ID 由回放 sha256 与契约 sha256 确定性生成；同一输入重跑会复用已完成批次，不新增帧或读数；读数在批次内以 `(batch_id, device_id, point_key, ts)` 唯一约束兜底。同批次重复行记为 `duplicate` 问题，不插入第二条读数。虚拟读数以 `(contract_id, batch_id, device_id, point_key, ts)` 唯一约束兜底，重复回放、断点续跑或重复 `derive` 都跳过已存在行；原始 `readings` 永不被虚拟计算修改。
 
 断点续采：每处理一行，帧/读数/问题与 `resume_state.line_offset` 在同一事务提交。`--resume` 校验当前回放 sha256 与状态一致；不一致时拒绝并提示创建新批次。若 `resume_state` 被删除，可从已有帧的最大行号重建偏移。
 
 ## 报告
 
-每次完整采集写入四个文件：
+每次完整采集写入四个基础文件，启用虚拟测点时额外写一个 CSV：
 
-- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单。
-- `reports/summary.md`：人读摘要，包含同样的表格。
+- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单，以及（如有）虚拟测点语义声明、读数、不可判原因与阈值判定。
+- `reports/summary.md`：人读摘要，包含同样的表格与“虚拟测点（离线派生）”小节。
 - `reports/summary.html`：自包含 HTML，内联 CSS，不引用 CDN、外部字体、脚本或图片。
 - `reports/pending_recollect.csv`：按设备/点位/问题码聚合的待重采清单。
+- `reports/derived_readings.csv`：每个虚拟读数一行，含误差语义、上下界、来源行号与不可判原因（仅启用虚拟测点时）。
 
 同一输入重复运行时，除首次批次时间外报告内容稳定；golden 测试覆盖 JSON 字段顺序、Markdown 关键片段、HTML 无外部资源和 CSV 结构。仓库中的 `reports/` 是一次演示采集的样例输出。
 
@@ -230,7 +247,7 @@ python -m pointlog serve --port 5000
 ```
 
 - 固定绑定 `127.0.0.1`，不接受自定义外部网卡。
-- 批次列表、批次详情、质量码分布、问题明细、问题帧列表、待重采点位。
+- 批次列表、批次详情、质量码分布、问题明细、问题帧列表、待重采点位，以及虚拟测点读数与误差范围（若已计算）。
 - 仅实现 GET；POST/PUT/PATCH/DELETE/HEAD/OPTIONS 均返回 `405` 和 `Allow: GET`。
 - 未知路径或不存在批次返回 `404`。
 - 不提供写入、删除、上传或配置修改接口。
@@ -242,7 +259,7 @@ python -m pointlog serve --port 5000
 python -m pytest -q
 ```
 
-覆盖 CRC 已知向量与错误向量、帧结构问题、全部数据类型/字节序、缩放与量程、质量码优先级、契约校验、幂等重跑、模拟中断续采、指纹变化拒绝续采、报告 golden 片段、只读服务路由与只读性。
+覆盖 CRC 已知向量与错误向量、帧结构问题、全部数据类型/字节序、缩放与量程、质量码优先级、契约校验、幂等重跑、模拟中断续采、指纹变化拒绝续采、报告 golden 片段、只读服务路由与只读性；虚拟测点覆盖 SI 量纲与前缀/offset 单位、零除静态拦截、上游质量级联、多级误差传播、两种误差语义及其阈值分歧、乱序对齐与续跑幂等。
 
 ## 目录结构
 
@@ -251,12 +268,13 @@ pointlog/
   pyproject.toml
   pointlog/                 # 本地包装包，便于未安装时 python -m pointlog
   Makefile
-  config/points.yaml
+  config/points.yaml       # 原始点位契约
+  config/derived.yaml      # 虚拟测点契约示例
   fixtures/                 # 确定性生成的 JSONL fixture
-  src/pointlog/             # 采集、契约、编解码、存储、报告、服务
+  src/pointlog/             # 采集、契约、编解码、虚拟测点、存储、报告、服务
   scripts/make_fixtures.py  # fixture 生成入口
   tests/                    # pytest
-  docs/                     # 设计、契约、质量码说明
+  docs/                     # 设计、契约、质量码、虚拟测点说明
   reports/                  # 演示报告样例
   var/                      # 演示 SQLite 台账
 ```

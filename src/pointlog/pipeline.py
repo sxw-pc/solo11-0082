@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .contract import ContractSet, load_contract
+from .derived import (
+    DerivedConfig,
+    load_derived_config,
+    materialize_derived,
+)
 from .lineproc import process_line
 from .quality import severity
 from .replay import ReplaySource, load_replay
@@ -44,6 +49,11 @@ class RunResult:
     issue_count: int
     pending_points: int
     report_paths: dict[str, str] = field(default_factory=dict)
+    derived_contract_id: str = ""
+    derived_rows_written: int = 0
+    derived_good: int = 0
+    derived_indeterminate: int = 0
+    derived_skipped: int = 0
 
 
 def _missing_contract_issues(
@@ -139,6 +149,7 @@ def run_capture(
     reports_dir: str | Path | None,
     resume: bool = False,
     stop_after: int | None = None,
+    derived_config_path: str | Path | None = None,
     now_factory: Callable[[], str] = utc_now_iso,
 ) -> RunResult:
     """Run one capture. Contract validation happens before the ledger is opened."""
@@ -146,6 +157,11 @@ def run_capture(
         raise ValueError("stop_after must be a positive integer")
     contract_path = Path(contract_path)
     contract = load_contract(contract_path)
+    # The derived DAG is validated up front as well: a broken virtual-point
+    # document must fail before the database is opened or reused.
+    derived_config: DerivedConfig | None = None
+    if derived_config_path is not None:
+        derived_config = load_derived_config(derived_config_path, contract)
     replay = load_replay(replay_path)
     contract_sha256 = sha256_file(contract_path)
     now = now_factory()
@@ -214,16 +230,89 @@ def run_capture(
                 raise
 
         report_paths: dict[str, str] = {}
+        derived_outcome = None
+        if derived_config is not None:
+            derived_outcome = materialize_derived(
+                store,
+                batch_id,
+                contract,
+                derived_config,
+                str(Path(derived_config_path).resolve()),
+                now=now_factory(),
+            )
         if reports_dir is not None:
             from .report import write_reports
 
             report_paths = write_reports(
-                store, batch_id, contract, Path(reports_dir)
+                store, batch_id, contract, Path(reports_dir),
+                derived_config=derived_config,
             )
-        return _result(
+        result = _result(
             store, batch_id, resumed=resumed, reused=reused,
             processed_lines=processed_offset, total_lines=replay.total_lines,
             report_paths=report_paths,
         )
+        if derived_outcome is not None:
+            result.derived_contract_id = derived_outcome.contract_id
+            result.derived_rows_written = derived_outcome.rows_written
+            result.derived_good = derived_outcome.good_rows
+            result.derived_indeterminate = derived_outcome.indeterminate_rows
+            result.derived_skipped = derived_outcome.skipped_existing
+        return result
+    finally:
+        store.close()
+
+
+def run_derived(
+    *,
+    batch_id: str,
+    contract_path: str | Path,
+    derived_config_path: str | Path,
+    db_path: str | Path,
+    reports_dir: str | Path | None = None,
+    now_factory: Callable[[], str] = utc_now_iso,
+):
+    """Materialize (or re-materialize) virtual points for an existing batch.
+
+    Raw readings are untouched. Repeated invocations are idempotent: existing
+    ``derived_readings`` rows for the same contract/batch/timestamp are skipped.
+    """
+    contract = load_contract(contract_path)
+    derived_config = load_derived_config(derived_config_path, contract)
+    store = Store(db_path)
+    try:
+        batch = store.get_batch(batch_id)
+        if batch is None:
+            raise PipelineError("batch_missing", f"batch {batch_id} does not exist")
+        if batch["status"] != "completed":
+            raise PipelineError(
+                "batch_not_completed",
+                f"batch {batch_id} is {batch['status']}; finish capture first",
+            )
+        outcome = materialize_derived(
+            store,
+            batch_id,
+            contract,
+            derived_config,
+            str(Path(derived_config_path).resolve()),
+            now=now_factory(),
+        )
+        report_paths: dict[str, str] = {}
+        if reports_dir is not None:
+            from .report import write_reports
+
+            report_paths = write_reports(
+                store, batch_id, contract, Path(reports_dir),
+                derived_config=derived_config,
+            )
+        return {
+            "batch_id": batch_id,
+            "derived_contract_id": outcome.contract_id,
+            "rows_written": outcome.rows_written,
+            "good_rows": outcome.good_rows,
+            "indeterminate_rows": outcome.indeterminate_rows,
+            "skipped_existing": outcome.skipped_existing,
+            "report_paths": report_paths,
+        }
     finally:
         store.close()

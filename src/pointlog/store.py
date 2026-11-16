@@ -34,6 +34,16 @@ class Store:
             "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
+        # Databases created by earlier releases only need the new derived
+        # tables added; the CREATE IF NOT EXISTS script above is the migration.
+        stored = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if stored is None or int(stored[0]) < SCHEMA_VERSION:
+            self.conn.execute(
+                "UPDATE schema_meta SET value = ? WHERE key = 'schema_version'",
+                (str(SCHEMA_VERSION),),
+            )
         self.conn.commit()
 
     def close(self) -> None:
@@ -263,3 +273,57 @@ class Store:
                 "UPDATE batches SET status = ?, finished_at = ? WHERE id = ?",
                 (status, finished_at, batch_id),
             )
+
+    # --- Derived-point ledger ----------------------------------------------
+
+    def get_derived_contract(self, contract_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM derived_contracts WHERE id = ?", (contract_id,)
+        ).fetchone()
+        return self._dict(row)
+
+    def find_derived_contract_by_sha(self, sha256: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM derived_contracts WHERE sha256 = ?", (sha256,)
+        ).fetchone()
+        return self._dict(row)
+
+    def derived_point_definitions(self, contract_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM derived_points WHERE contract_id = ? ORDER BY ordinal",
+            (contract_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def derived_reading_rows(
+        self, batch_id: str, contract_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = ("SELECT * FROM derived_readings WHERE batch_id = ?"
+               + (" AND contract_id = ?" if contract_id else "")
+               + " ORDER BY device_id, point_key, ts, id")
+        params: tuple[Any, ...] = (batch_id, contract_id) if contract_id else (batch_id,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (*params, limit)
+        return [dict(row) for row in self.conn.execute(sql, params).fetchall()]
+
+    def derived_row_counts(
+        self, batch_id: str, contract_id: str
+    ) -> dict[tuple[str, str], dict[str, int]]:
+        counts: dict[tuple[str, str], dict[str, int]] = {}
+        rows = self.conn.execute(
+            "SELECT device_id, point_key, quality_code, COUNT(*) AS n "
+            "FROM derived_readings WHERE batch_id = ? AND contract_id = ? "
+            "GROUP BY device_id, point_key, quality_code",
+            (batch_id, contract_id),
+        ).fetchall()
+        for row in rows:
+            key = (row["device_id"], row["point_key"])
+            bucket = counts.setdefault(key, {"total": 0, "good": 0, "indeterminate": 0})
+            bucket["total"] += int(row["n"])
+            if row["quality_code"] == "derived_good":
+                bucket["good"] += int(row["n"])
+            else:
+                bucket["indeterminate"] += int(row["n"])
+        return counts

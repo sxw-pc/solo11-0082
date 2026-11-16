@@ -13,6 +13,8 @@ from .store import Store
 from .store_queries import (
     batch_list,
     batch_totals,
+    derived_contracts,
+    derived_reading_summary,
     issue_distribution,
     issue_rows,
     pending_recollect,
@@ -103,6 +105,50 @@ def _index_page(store: Store) -> bytes:
     return _layout("点位采录台 · 批次列表", body)
 
 
+def _derived_section(store: Store, batch_id: str) -> str:
+    contracts = derived_contracts(store)
+    if not contracts:
+        return ""
+    blocks = ["<h2>虚拟测点（离线派生）</h2>"]
+    for contract in contracts:
+        contract_id = contract["id"]
+        rows = derived_reading_summary(store, batch_id, contract_id)
+        if not rows:
+            continue
+        blocks.append(
+            f'<p class="note">契约 <code>{_e(contract_id)}</code> · 表达式版本 '
+            f'<code>{_e(contract["expression_version"])}</code> · 误差语义 '
+            f'<code>{_e(contract["error_semantics"])}</code></p>'
+        )
+        table_rows = []
+        for row in rows:
+            if row["quality_code"] == "derived_good":
+                value = (
+                    f'{_e(row["engineering_value"])} {_e(row["unit"])} '
+                    f'[{_e(row["lower_bound"])}, {_e(row["upper_bound"])}] '
+                    f'({_e(row["bound_sigma"] or "guaranteed")})'
+                )
+                state = _e(row["threshold_state"] or "-")
+                reason = "-"
+            else:
+                value = "不可判"
+                state = "-"
+                reason = f'<code>{_e(row["reason_codes"])}</code>'
+            table_rows.append([
+                f"<code>{_e(row['device_id'])}</code>",
+                f"<code>{_e(row['point_key'])}</code>",
+                _e(row["ts"]), value, state, reason,
+                f"<code>{_e(row['line_no_json'])}</code>",
+            ])
+        blocks.append(_table(
+            ["设备", "虚拟点位", "时刻", "数值与误差范围", "阈值状态", "不可判原因", "来源行号"],
+            table_rows,
+        ))
+    if len(blocks) == 1:
+        return ""
+    return "".join(blocks)
+
+
 def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
     batch_id = batch["id"]
     totals = batch_totals(store, batch_id)
@@ -171,6 +217,7 @@ def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
 {_table(["行", "设备", "点位", "问题码", "质量码", "级别", "帧摘要", "说明"], issue_detail_rows)}
 <h2>问题帧列表</h2>
 {_table(["行", "质量码", "问题码", "请求帧摘要", "应答帧摘要", "说明"], frame_rows)}
+{_derived_section(store, batch_id)}
 """
     return _layout(f"批次 {batch_id}", body)
 

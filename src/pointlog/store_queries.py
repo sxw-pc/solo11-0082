@@ -213,3 +213,72 @@ def batch_totals(store: Store, batch_id: str) -> dict[str, int]:
         "issues": int(issue_count),
         "pending_points": pending_point_count(store, batch_id),
     }
+
+
+def derived_contracts(store: Store) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM derived_contracts ORDER BY created_at, id"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def derived_point_stats(
+    store: Store, batch_id: str, contract_id: str
+) -> list[dict[str, Any]]:
+    definitions = store.derived_point_definitions(contract_id)
+    counts = store.derived_row_counts(batch_id, contract_id)
+    result = []
+    for definition in definitions:
+        key = (definition["device_id"], definition["point_key"])
+        bucket = counts.get(key, {"total": 0, "good": 0, "indeterminate": 0})
+        result.append({
+            "device_id": definition["device_id"],
+            "point_key": definition["point_key"],
+            "unit": definition["unit"],
+            "expression": definition["expression"],
+            "expression_version": definition["expression_version"],
+            "error_semantics": definition["error_semantics"],
+            "threshold_direction": definition["threshold_direction"],
+            "threshold": definition["threshold"],
+            "total": bucket["total"],
+            "good": bucket["good"],
+            "indeterminate": bucket["indeterminate"],
+        })
+    return result
+
+
+def derived_reading_summary(
+    store: Store, batch_id: str, contract_id: str
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT * FROM derived_readings WHERE batch_id = ? AND contract_id = ? "
+        "ORDER BY device_id, point_key, ts, id",
+        (batch_id, contract_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def derived_indeterminate_summary(
+    store: Store, batch_id: str, contract_id: str
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT device_id, point_key, ts, reason_codes, sources_json, line_no_json "
+        "FROM derived_readings WHERE batch_id = ? AND contract_id = ? "
+        "AND quality_code = 'derived_indeterminate' "
+        "ORDER BY device_id, point_key, ts",
+        (batch_id, contract_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def derived_threshold_summary(
+    store: Store, batch_id: str, contract_id: str
+) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT device_id, point_key, ts, error_semantics, threshold, threshold_state, "
+        "engineering_value, lower_bound, upper_bound, unit, bound_sigma "
+        "FROM derived_readings WHERE batch_id = ? AND contract_id = ? "
+        "AND threshold_state <> '' ORDER BY point_key, ts",
+        (batch_id, contract_id),
+    ).fetchall()
+    return [dict(row) for row in rows]

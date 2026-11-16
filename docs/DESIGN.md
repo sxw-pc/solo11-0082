@@ -19,7 +19,8 @@
 | `modbus.py` | 请求/应答帧结构、CRC 标志、异常帧 | 工程值、量程 |
 | `crc.py` | CRC-16/MODBUS | 帧结构 |
 | `contract.py` | YAML 契约 schema 与静态校验 | 帧解析 |
-| `codec.py` | 寄存器字节序、类型、缩放、枚举 | 数据库、质量优先级 |
+| `codec.py` | 字节序、类型、缩放、枚举；SI 单位/维度与精确 Decimal 区间运算 | 数据库、质量优先级 |
+| `derived.py` | 虚拟测点 DAG 校验、量纲/误差传播、可复核虚拟读数落账 | 帧采集、HTML 排版 |
 | `quality.py` | 质量码目录、优先级、待重采属性 | I/O |
 | `lineproc.py` | 单行帧级到读数级处理 | 批次生命周期 |
 | `pipeline.py` | 批次、续采、提交、完成/失败状态 | HTTP、报告排版 |

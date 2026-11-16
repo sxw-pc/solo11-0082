@@ -1,6 +1,6 @@
-"""SQLite schema for the capture ledger."""
+"""SQLite schema for the capture ledger and the offline derived-point ledger."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -102,4 +102,79 @@ CREATE INDEX IF NOT EXISTS idx_batches_fingerprint
     ON batches(replay_sha256, contract_sha256);
 CREATE INDEX IF NOT EXISTS idx_resume_path
     ON resume_state(replay_path, updated_at);
+
+-- Offline virtual (derived) points -----------------------------------------
+-- One row per parsed derived-point contract document. The fingerprint covers
+-- the exact YAML bytes so reruns with an unchanged document are idempotent.
+CREATE TABLE IF NOT EXISTS derived_contracts (
+    id TEXT PRIMARY KEY,
+    source_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    version INTEGER NOT NULL,
+    error_semantics TEXT NOT NULL
+        CHECK (error_semantics IN ('guaranteed', 'independent')),
+    expression_version TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Static, normalized definition of one virtual point.
+CREATE TABLE IF NOT EXISTS derived_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    point_key TEXT NOT NULL,
+    expression TEXT NOT NULL,
+    expression_version TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    dimension_json TEXT NOT NULL,
+    error_semantics TEXT NOT NULL
+        CHECK (error_semantics IN ('guaranteed', 'independent')),
+    inputs_json TEXT NOT NULL,
+    threshold REAL,
+    threshold_direction TEXT NOT NULL DEFAULT '',
+    ordinal INTEGER NOT NULL,
+    UNIQUE (contract_id, device_id, point_key),
+    FOREIGN KEY (contract_id) REFERENCES derived_contracts(id) ON DELETE CASCADE
+);
+
+-- One row per (virtual point, sample timestamp). Rows whose sources are
+-- missing, fail CRC/decode, contradict each other or are non-finite are stored
+-- as indeterminate: value/bounds are NULL and reason_codes lists the causes.
+CREATE TABLE IF NOT EXISTS derived_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    point_key TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    expression_version TEXT NOT NULL,
+    error_semantics TEXT NOT NULL
+        CHECK (error_semantics IN ('guaranteed', 'independent')),
+    quality_code TEXT NOT NULL,
+    reason_codes TEXT NOT NULL DEFAULT '',
+    engineering_value REAL,
+    unit TEXT NOT NULL DEFAULT '',
+    lower_bound REAL,
+    upper_bound REAL,
+    bound_sigma TEXT NOT NULL DEFAULT '',
+    threshold REAL,
+    threshold_state TEXT NOT NULL DEFAULT '',
+    sources_json TEXT NOT NULL,
+    -- Exact-ish Decimal text in coherent SI units for chain re-evaluation,
+    -- plus the source reading line numbers for end-to-end traceability.
+    engineering_value_si TEXT,
+    lower_bound_si TEXT,
+    upper_bound_si TEXT,
+    sigma_si TEXT,
+    is_delta INTEGER NOT NULL DEFAULT 0,
+    line_no_json TEXT NOT NULL DEFAULT '[]',
+    UNIQUE (contract_id, batch_id, device_id, point_key, ts),
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
+    FOREIGN KEY (contract_id) REFERENCES derived_contracts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_derived_readings_batch
+    ON derived_readings(batch_id, device_id, point_key);
+CREATE INDEX IF NOT EXISTS idx_derived_points_contract
+    ON derived_points(contract_id, device_id, point_key);
 """

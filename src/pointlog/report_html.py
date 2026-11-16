@@ -118,6 +118,49 @@ def render_html(summary: dict[str, Any]) -> str:
         if pending_rows
         else '<p class="note">本次采集没有待重采点位。</p>'
     )
+    derived = summary.get("derived")
+    derived_html = ""
+    if derived is not None:
+        point_rows = [
+            [f"<code>{_e(item['device_id'])}</code>",
+             f"<code>{_e(item['point_key'])}</code>", _e(item["unit"] or "-"),
+             f"<code>{_e(item['expression'])}</code>",
+             f"<code>{_e(item['error_semantics'])}</code>",
+             _e(item["good"]), _e(item["indeterminate"])]
+            for item in derived["points"]
+        ]
+        reading_rows = [
+            [f"<code>{_e(row['device_id'])}</code>",
+             f"<code>{_e(row['point_key'])}</code>", _e(row["ts"]),
+             _e(f"{row['engineering_value']:.9g}"), _e(row["unit"]),
+             _e(f"{row['lower_bound']:.9g}"), _e(f"{row['upper_bound']:.9g}"),
+             f"<code>{_e(row['bound_sigma'] or 'guaranteed')}</code>",
+             _e(row["threshold_state"] or "-")]
+            for row in derived["readings"] if row["quality_code"] == "derived_good"
+        ]
+        indeterminate_rows = [
+            [f"<code>{_e(row['device_id'])}</code>",
+             f"<code>{_e(row['point_key'])}</code>", _e(row["ts"]),
+             f"<code>{_e(row['reason_codes'])}</code>",
+             f"<code>{_e(row['line_no_json'])}</code>"]
+            for row in derived["indeterminate"]
+        ]
+        warning = ""
+        if derived["independent_has_no_guarantee"]:
+            warning = ('<p class="note">独立随机误差给出的是一阶 1σ 估计范围，'
+                       '<strong>不保证</strong>真值必然落在区间内，不得与保证界限混称为同一精度。</p>')
+        derived_html = f"""
+<section>
+<h2>虚拟测点（离线派生）</h2>
+<p class="note">表达式版本 <code>{_e(derived['expression_version'])}</code> ·
+授权误差语义 <code>{_e(derived['error_semantics'])}</code> · {_e(derived['semantics_statement'])}</p>
+{warning}
+{_table(['设备', '虚拟点位', '单位', '表达式', '误差语义', '可判', '不可判'], point_rows)}
+<h3>虚拟读数与误差范围</h3>
+{_table(['设备', '点位', '时刻', '数值', '单位', '下界', '上界', '界限语义', '阈值状态'], reading_rows)}
+<h3>不可判虚拟读数及原因</h3>
+{_table(['设备', '点位', '时刻', '原因码', '来源行号'], indeterminate_rows)}
+</section>"""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -183,6 +226,7 @@ def render_html(summary: dict[str, Any]) -> str:
 {pending_note}
 {_table(['设备', '点位', '问题码', '质量码', '次数', '行号', '说明'], pending_rows)}
 </section>
+{derived_html}
 
 <footer>
 本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。

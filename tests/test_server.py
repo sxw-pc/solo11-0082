@@ -105,3 +105,66 @@ def test_server_does_not_mutate_ledger(running_server):
 def test_create_server_requires_database(tmp_path):
     with pytest.raises(FileNotFoundError):
         create_server(tmp_path / "missing.db", 0)
+
+
+def test_batch_page_shows_derived_section(tmp_path):
+    from pointlog.contract import parse_contract
+    from pointlog.derived import materialize_derived, parse_derived_config
+    from pointlog.util import utc_now_iso
+
+    contract_text = """
+version: 1
+devices:
+  - id: dev1
+    label: Device One
+    points:
+      - {key: volt, slave_id: 1, function: 3, start: 0, count: 2, data_type: uint32,
+         byte_order: ABCD, scale: 1, offset: 0, unit: V, range: [0, 1000]}
+      - {key: curr, slave_id: 1, function: 3, start: 2, count: 2, data_type: uint32,
+         byte_order: ABCD, scale: 1, offset: 0, unit: A, range: [0, 100]}
+"""
+    derived_text = """
+version: 1
+error_semantics: guaranteed
+derived_points:
+  - device_id: dev1
+    key: power_w
+    expression: v * i
+    unit: W
+    inputs:
+      v: {point: volt, abs_error: 1, unit: V}
+      i: {point: curr, abs_error: 0.2, unit: A}
+"""
+    db_path = tmp_path / "server.db"
+    store = Store(db_path)
+    contract = parse_contract(contract_text)
+    batch = store.create_batch(
+        batch_id="b_srv", replay_path=str(tmp_path / "r.jsonl"),
+        replay_sha256="a" * 64, contract_path=str(tmp_path / "c.yaml"),
+        contract_sha256="b" * 64, started_at=utc_now_iso(), total_lines=2,
+    )
+    for key, val, unit, line in (("volt", 10.0, "V", 1), ("curr", 2.0, "A", 2)):
+        store.conn.execute(
+            "INSERT INTO readings(batch_id, device_id, point_key, ts, line_no, "
+            "raw_value, engineering_value, unit, quality_code, enum_label, source) "
+            "VALUES(?,?,?,?,?,?,?,?,?,'','t')",
+            (batch["id"], "dev1", key, "2025-03-01T00:00:00Z", line, val, val,
+             unit, "good"),
+        )
+    config = parse_derived_config(derived_text, contract)
+    materialize_derived(store, batch["id"], contract, config,
+                        str(tmp_path / "d.yaml"), now=utc_now_iso())
+    store.close()
+
+    server = create_server(db_path, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        _, _, body = _request(server, "GET", f"/batch/{batch['id']}")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+    assert "虚拟测点（离线派生）" in body
+    assert "power_w" in body
+    assert "guaranteed" in body

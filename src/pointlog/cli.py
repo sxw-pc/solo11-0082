@@ -9,8 +9,15 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .contract import ContractError
+from .derived import DerivedConfigError
 from .fixtures_gen import generate_demo_replay
-from .pipeline import IngestInterrupted, PipelineError, RunResult, run_capture
+from .pipeline import (
+    IngestInterrupted,
+    PipelineError,
+    RunResult,
+    run_capture,
+    run_derived,
+)
 from .replay import ReplayError
 from .resume import ResumeRejected
 from .server import serve
@@ -48,6 +55,10 @@ def _print_result(result: RunResult) -> None:
     print(f"有效读数:     {result.valid_readings}")
     print(f"问题记录:     {result.issue_count}")
     print(f"待重采点位:   {result.pending_points}")
+    if result.derived_contract_id:
+        print(f"虚拟测点契约: {result.derived_contract_id}")
+        print(f"虚拟读数写入: {result.derived_rows_written}（可判 {result.derived_good} / "
+              f"不可判 {result.derived_indeterminate}，跳过已存在 {result.derived_skipped}）")
     for name, path in result.report_paths.items():
         print(f"报告[{name}]: {path}")
 
@@ -60,6 +71,7 @@ def _run_capture_command(args: argparse.Namespace) -> int:
         reports_dir=None if args.no_report else args.reports,
         resume=args.resume,
         stop_after=args.stop_after,
+        derived_config_path=args.derived_config,
     )
     _print_result(result)
     return 0
@@ -74,8 +86,26 @@ def _demo_command(args: argparse.Namespace) -> int:
         contract_path=args.contract,
         db_path=args.db,
         reports_dir=args.reports,
+        derived_config_path=args.derived_config,
     )
     _print_result(result)
+    return 0
+
+
+def _derive_command(args: argparse.Namespace) -> int:
+    outcome = run_derived(
+        batch_id=args.batch_id,
+        contract_path=args.contract,
+        derived_config_path=args.derived_config,
+        db_path=args.db,
+        reports_dir=args.reports,
+    )
+    print(f"批次:            {outcome['batch_id']}")
+    print(f"虚拟测点契约:    {outcome['derived_contract_id']}")
+    print(f"虚拟读数写入:    {outcome['rows_written']}（可判 {outcome['good_rows']} / "
+          f"不可判 {outcome['indeterminate_rows']}，跳过已存在 {outcome['skipped_existing']}）")
+    for name, path in outcome["report_paths"].items():
+        print(f"报告[{name}]: {path}")
     return 0
 
 
@@ -160,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--fixture", default=str(DEFAULT_FIXTURE_PATH))
     demo.add_argument("--db", default=str(DEFAULT_DB_PATH))
     demo.add_argument("--reports", default=str(DEFAULT_REPORTS_DIR))
+    demo.add_argument("--derived-config", default=None,
+                      help="虚拟测点 YAML 契约；缺省不计算虚拟测点")
     demo.set_defaults(func=_demo_command)
 
     run = sub.add_parser("run", help="执行一次回放采集")
@@ -171,12 +203,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", action="store_true", help="从已记录的行偏移断点续采")
     run.add_argument("--stop-after", type=int, default=None,
                      help="调试用：处理 N 行后模拟中断")
+    run.add_argument("--derived-config", default=None,
+                     help="虚拟测点 YAML 契约；缺省不计算虚拟测点")
     run.set_defaults(func=_run_capture_command)
 
     fixtures = sub.add_parser("fixtures", help="确定性重新生成 fixture")
     fixtures.add_argument("--contract", default=str(DEFAULT_CONFIG_PATH))
     fixtures.add_argument("--output", default=str(DEFAULT_FIXTURE_PATH))
     fixtures.set_defaults(func=_fixtures_command)
+
+    derive = sub.add_parser("derive", help="为已完成批次离线计算虚拟测点")
+    derive.add_argument("batch_id")
+    derive.add_argument("--contract", default=str(DEFAULT_CONFIG_PATH))
+    derive.add_argument("--derived-config", required=True,
+                        help="虚拟测点 YAML 契约")
+    _add_db(derive)
+    derive.add_argument("--reports", default=str(DEFAULT_REPORTS_DIR))
+    derive.set_defaults(func=_derive_command)
 
     batches = sub.add_parser("batches", help="列出批次摘要")
     _add_db(batches)
@@ -201,6 +244,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(args.func(args))
     except ContractError as exc:
         print(f"契约校验失败: {exc}", file=sys.stderr)
+        return 2
+    except DerivedConfigError as exc:
+        print(f"虚拟测点契约校验失败: {exc}", file=sys.stderr)
         return 2
     except ResumeRejected as exc:
         print(f"拒绝续采: [{exc.code}] {exc.detail}", file=sys.stderr)

@@ -1,0 +1,50 @@
+version: 1
+# 离线虚拟测点契约（示例），与 config/points.yaml 配合使用。
+# 规则：只允许引用同一设备、同一采样时刻的原始点或上游虚拟点。
+# error_semantics 选择授权误差语义：
+#   guaranteed  —— 区间运算，界限对任意允许输入都成立；
+#   independent —— 一阶独立随机误差传播，给出 1σ 估计范围，不提供必然保证。
+error_semantics: guaranteed
+derived_points:
+  # --- 设备 demo-gateway：m3/h -> L/s 的精确前缀/时间换算 ---
+  - device_id: demo-gateway
+    key: flow_l_per_s
+    expression: q
+    unit: L/s
+    inputs:
+      q:
+        point: line_a_flow
+        abs_error: 0.5
+        unit: m3/h
+
+  # --- 设备 line-a：kPa -> Pa 的精确前缀换算 ---
+  - device_id: line-a
+    key: pressure_pa
+    expression: p
+    unit: Pa
+    inputs:
+      p:
+        point: line_a_pressure
+        abs_error: 2
+        unit: kPa
+
+  # 多级链路：米 -> 厘米（上游虚拟点的误差与来源继续传播，而非贴一个百分比）。
+  - device_id: line-a
+    key: level_cm
+    expression: lm * 100
+    unit: cm
+    inputs:
+      lm:
+        point: line_a_level
+        abs_error: 0.05
+        unit: m
+
+  - device_id: line-a
+    key: level_mm
+    expression: lcm * 10
+    unit: mm
+    inputs:
+      lcm:
+        point: level_cm
+        abs_error: 0
+        unit: cm
