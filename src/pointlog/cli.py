@@ -48,6 +48,12 @@ def _print_result(result: RunResult) -> None:
     print(f"有效读数:     {result.valid_readings}")
     print(f"问题记录:     {result.issue_count}")
     print(f"待重采点位:   {result.pending_points}")
+    fence = result.version_fence
+    if fence:
+        print(
+            f"版本围栏:     {fence['result']} ({fence['route']}, "
+            f"来源 {fence['source_status']}, {fence['byte_count']} 字节)"
+        )
     for name, path in result.report_paths.items():
         print(f"报告[{name}]: {path}")
 
@@ -121,14 +127,24 @@ def _show_command(args: argparse.Namespace) -> int:
             print(f"批次不存在: {args.batch_id}", file=sys.stderr)
             return 4
         totals = batch_totals(store, batch["id"])
+        fence = store.get_fence(batch["id"])
+        trusted = fence is None or fence["result"] == "verified"
         print(f"批次:       {batch['id']}")
         print(f"状态:       {batch['status']}")
         print(f"回放文件:   {Path(batch['replay_path']).name}")
         print(f"回放 SHA:   {batch['replay_sha256']}")
         print(f"契约 SHA:   {batch['contract_sha256']}")
         print(f"行数:       {batch['processed_lines']}/{batch['total_lines']}")
-        print(f"读数/有效:  {totals['readings']}/{totals['valid_readings']}")
-        print(f"问题/待重采点位: {totals['issues']}/{totals['pending_points']}")
+        if fence is not None:
+            print(f"版本围栏:   {fence['result']} ({fence['route']}, 来源 {fence['source_status']})")
+            print(f"封存副本:   {fence['sealed_path'] or '-'}")
+            print(f"字节数:     {fence['byte_count'] if fence['byte_count'] is not None else '-'}")
+        if trusted:
+            print(f"读数/有效:  {totals['readings']}/{totals['valid_readings']}")
+            print(f"问题/待重采点位: {totals['issues']}/{totals['pending_points']}")
+        else:
+            print("读数/有效:  不可用（版本围栏未通过，帧记录仅供诊断）")
+            print("问题/待重采点位: 不可用")
         print("质量码分布:")
         for code, count in quality_distribution(store, batch["id"]).items():
             print(f"  {code:20} {count}")

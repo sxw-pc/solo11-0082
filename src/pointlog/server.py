@@ -140,6 +140,19 @@ def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
             f"<code>{_e(row['response_hex'][:48])}</code>",
             _e(row["detail"]),
         ])
+    fence = store.get_fence(batch_id)
+    fence_rows = []
+    if fence is not None:
+        fence_rows = [
+            ["版本围栏", _e(f"{fence['route']} · {fence['result']}")],
+            ["来源现状", _e(fence["source_status"])],
+            ["封存副本", f'<span class="mono">{_e(fence["sealed_path"] or "-")}</span>'],
+            ["字节数", _e(fence["byte_count"] if fence["byte_count"] is not None else "-")],
+        ]
+        if fence["result"] != "verified":
+            fence_rows.append(
+                ["统计可用性", _e("不可用（版本围栏未通过，帧记录仅供诊断）")]
+            )
     body = f"""
 <p><a href="/">← 返回批次列表</a></p>
 <h1>批次详情</h1>
@@ -160,7 +173,7 @@ def _batch_page(store: Store, batch: dict[str, Any]) -> bytes:
     ["契约文件", _e(Path(batch["contract_path"]).name)],
     ["契约 SHA-256", f'<span class="mono">{_e(batch["contract_sha256"])}</span>'],
     ["回放总行数 / 已处理", f"{_e(batch['total_lines'])} / {_e(batch['processed_lines'])}"],
-])}
+] + fence_rows)}
 <h2>质量码分布</h2>
 {_table(["质量码", "严重级别", "数量"], quality_rows)}
 <h2>问题分布</h2>

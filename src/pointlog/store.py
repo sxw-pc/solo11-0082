@@ -31,7 +31,8 @@ class Store:
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
-            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+            "INSERT OR REPLACE INTO schema_meta(key, value) "
+            "VALUES('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
         self.conn.commit()
@@ -91,6 +92,49 @@ class Store:
         if batch is None:  # pragma: no cover - defensive
             raise RuntimeError("failed to create batch")
         return batch
+
+    def record_fence(
+        self,
+        *,
+        batch_id: str,
+        route: str,
+        source_path: str,
+        sealed_path: str,
+        sha256: str,
+        byte_count: int | None,
+        total_lines: int,
+        source_status: str,
+        result: str,
+        detail: str,
+    ) -> None:
+        """Upsert the version-fence provenance record for a batch."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO batch_fence("
+                "batch_id, route, source_path, sealed_path, sha256, byte_count, "
+                "total_lines, source_status, result, detail) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(batch_id) DO UPDATE SET "
+                "route=excluded.route, source_path=excluded.source_path, "
+                "sealed_path=excluded.sealed_path, sha256=excluded.sha256, "
+                "byte_count=excluded.byte_count, total_lines=excluded.total_lines, "
+                "source_status=excluded.source_status, result=excluded.result, "
+                "detail=excluded.detail",
+                (batch_id, route, source_path, sealed_path, sha256, byte_count,
+                 total_lines, source_status, result, detail),
+            )
+
+    def get_fence(self, batch_id: str) -> dict[str, Any] | None:
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM batch_fence WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Databases created before the fence existed have no batch_fence
+            # table; read-only handles cannot create it.  Absence of the
+            # record simply means "no fence provenance recorded".
+            return None
+        return self._dict(row)
 
     def ensure_resume_state(
         self,

@@ -110,24 +110,33 @@ def test_resume_after_resume_state_is_deleted(demo_paths):
         store.close()
 
 
-def test_resume_rejects_changed_replay(demo_paths):
+def test_resume_completes_from_sealed_copy_when_source_changes(demo_paths):
+    """Sealed-fence route: replacing the source path after a partial run does
+    not block the resume — the batch owns a verified private copy of the
+    original version and completes from it.  The drift is reported through
+    the fence record instead of being silently attributed."""
     batch_id = _partial_run(demo_paths, 4)
     original_batches = 1
     with demo_paths.fixture.open("a", encoding="utf-8") as handle:
         handle.write("\n")
-    with pytest.raises(ResumeRejected) as excinfo:
-        run_capture(
-            replay_path=demo_paths.fixture,
-            contract_path=demo_paths.contract,
-            db_path=demo_paths.db,
-            reports_dir=None,
-            resume=True,
-        )
-    assert excinfo.value.code == "replay_changed"
+    result = run_capture(
+        replay_path=demo_paths.fixture,
+        contract_path=demo_paths.contract,
+        db_path=demo_paths.db,
+        reports_dir=None,
+        resume=True,
+    )
+    assert result.batch_id == batch_id
+    assert result.status == "completed"
+    assert result.processed_lines == 19
     store = Store(demo_paths.db, read_only=True)
     try:
         assert store.conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == original_batches
-        assert store.get_batch(batch_id)["status"] == "partial"
+        batch = store.get_batch(batch_id)
+        assert batch["status"] == "completed"
+        fence = store.get_fence(batch_id)
+        assert fence["result"] == "verified"
+        assert fence["source_status"] == "changed"
     finally:
         store.close()
 

@@ -9,6 +9,7 @@ def test_json_summary_has_stable_shape(demo_run):
     assert list(summary) == [
         "schema_version",
         "batch",
+        "version_fence",
         "totals",
         "quality_code_distribution",
         "issue_distribution",
@@ -21,16 +22,30 @@ def test_json_summary_has_stable_shape(demo_run):
         "processed_lines", "replay_file", "replay_sha256", "contract_file",
         "contract_sha256",
     ]
-    assert summary["schema_version"] == 1
+    assert list(summary["version_fence"]) == [
+        "route", "source_path", "sealed_path", "sha256", "byte_count",
+        "total_lines", "source_status", "result", "detail",
+    ]
+    assert summary["schema_version"] == 2
     assert summary["batch"]["status"] == "completed"
     assert summary["batch"]["total_lines"] == 19
     assert summary["batch"]["replay_file"] == "replay_demo.jsonl"
+    fence = summary["version_fence"]
+    assert fence["route"] == "sealed_copy"
+    assert fence["result"] == "verified"
+    assert fence["source_status"] == "match"
+    assert fence["sha256"] == summary["batch"]["replay_sha256"]
+    assert fence["total_lines"] == 19
+    assert fence["byte_count"] == demo_run.paths.fixture.stat().st_size
+    assert fence["source_path"] == str(demo_run.paths.fixture.resolve())
+    assert fence["sealed_path"].endswith(f"{fence['sha256']}.jsonl")
     assert summary["totals"] == {
         "frames": 19,
         "readings": 11,
         "valid_readings": 8,
         "issues": 12,
         "pending_points": 7,
+        "stats_status": "available",
     }
     assert summary["quality_code_distribution"]["good"] == 8
     assert summary["quality_code_distribution"]["bad_frame"] == 3
@@ -43,10 +58,14 @@ def test_json_summary_has_stable_shape(demo_run):
 def test_markdown_golden_fragments(demo_run):
     text = (demo_run.paths.reports / "summary.md").read_text(encoding="utf-8")
     assert text.startswith("# 点位采录台采集报告\n")
-    for heading in ("## 批次信息", "## 概览", "## 质量码分布",
+    for heading in ("## 批次信息", "## 版本围栏", "## 概览", "## 质量码分布",
                     "## 问题分布", "## 按设备统计", "## 按点位统计",
                     "## 待重采点位"):
         assert heading in text
+    assert "| 围栏路由 | sealed_copy |" in text
+    assert "| 围栏结果 | verified |" in text
+    assert "| 来源现状 | match |" in text
+    assert "| 统计可用性 | 可用 |" in text
     assert "| good | info | 否 | 8 |" in text
     assert "| bad_frame | error | 是 | 3 |" in text
     assert "| missing_response | warning | 是 | 1 |" in text
@@ -59,6 +78,7 @@ def test_html_is_self_contained(demo_run):
     assert text.startswith("<!doctype html>")
     assert "<style>" in text
     assert "质量码分布" in text
+    assert "版本围栏" in text
     assert "待重采点位" in text
     assert "bad_crc_request" in text
     assert "http://" not in text

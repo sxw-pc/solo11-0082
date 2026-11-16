@@ -1,6 +1,6 @@
 """SQLite schema for the capture ledger."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -78,6 +78,20 @@ CREATE TABLE IF NOT EXISTS issues (
     ts TEXT NOT NULL DEFAULT '',
     pending_collect INTEGER NOT NULL DEFAULT 0,
     UNIQUE (batch_id, line_no, point_key, issue_code, detail),
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS batch_fence (
+    batch_id TEXT PRIMARY KEY,
+    route TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    sealed_path TEXT NOT NULL DEFAULT '',
+    sha256 TEXT NOT NULL,
+    byte_count INTEGER,
+    total_lines INTEGER NOT NULL DEFAULT 0,
+    source_status TEXT NOT NULL DEFAULT 'unknown',
+    result TEXT NOT NULL CHECK (result IN ('verified', 'violated', 'unproven')),
+    detail TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
 );
 

@@ -73,9 +73,20 @@ def _severity(value: str) -> str:
     return f'<span class="{css}">{_e(value)}</span>'
 
 
+def _stat(value: Any) -> str:
+    """Escaped cell for a statistic that may be marked unavailable."""
+    return _e("不可用" if value is None else value)
+
+
+def _pending_flag(value: Any) -> str:
+    return _e("不可用" if value is None else ("是" if value else "否"))
+
+
 def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
+    fence = summary["version_fence"]
     totals = summary["totals"]
+    stats_available = totals["stats_status"] == "available"
     quality = summary["quality_code_distribution"]
     quality_rows = []
     for code, count in quality.items():
@@ -92,17 +103,18 @@ def render_html(summary: dict[str, Any]) -> str:
         summary["issue_distribution"].items()
     ]
     device_rows = [
-        [_e(item["device_id"]), _e(item["reading_count"]), _e(item["good_count"]),
-         _e(item["issue_count"]), _e(item["pending_count"])]
+        [_e(item["device_id"]), _e(item["reading_count"]), _stat(item["good_count"]),
+         _e(item["issue_count"]), _stat(item["pending_count"])]
         for item in summary["devices"]
     ]
     point_rows = [
         [f"<code>{_e(item['device_id'])}</code>",
          f"<code>{_e(item['point_key'])}</code>", _e(item["unit"] or "-"),
-         _e(item["reading_count"]), _e(item["good_count"]),
-         _e(item["issue_count"]), _e("是" if item["pending"] else "否")]
+         _e(item["reading_count"]), _stat(item["good_count"]),
+         _e(item["issue_count"]), _pending_flag(item["pending"])]
         for item in summary["points"]
     ]
+    pending = summary["pending_recollect"]
     pending_rows = [
         [f"<code>{_e(item['device_id'])}</code>",
          f"<code>{_e(item['point_key'])}</code>",
@@ -111,12 +123,35 @@ def render_html(summary: dict[str, Any]) -> str:
          _e(item["occurrences"]),
          _e(",".join(str(number) for number in item["line_numbers"]) or "-"),
          _e(item["detail"])]
-        for item in summary["pending_recollect"]
+        for item in (pending or [])
     ]
-    pending_note = (
-        '<p class="note">存在待重采点位，请按 CSV 清单安排回放补采。</p>'
-        if pending_rows
-        else '<p class="note">本次采集没有待重采点位。</p>'
+    if pending is None:
+        pending_note = (
+            '<p class="note">版本围栏未通过：待重采清单不可用，帧记录仅供诊断。</p>'
+        )
+    elif pending_rows:
+        pending_note = (
+            '<p class="note">存在待重采点位，请按 CSV 清单安排回放补采。</p>'
+        )
+    else:
+        pending_note = '<p class="note">本次采集没有待重采点位。</p>'
+    fence_rows = "".join(
+        f"<tr><th>{_e(label)}</th><td>{cell}</td></tr>"
+        for label, cell in [
+            ("围栏路由", _e(fence["route"])),
+            ("围栏结果", _e(fence["result"])),
+            ("来源路径", f'<span class="mono">{_e(fence["source_path"])}</span>'),
+            ("封存副本", f'<span class="mono">{_e(fence["sealed_path"] or "-")}</span>'),
+            ("处理版本 SHA-256", f'<span class="mono">{_e(fence["sha256"])}</span>'),
+            ("字节数", _e(fence["byte_count"] if fence["byte_count"] is not None else "-")),
+            ("行数", _e(fence["total_lines"])),
+            ("来源现状", _e(fence["source_status"])),
+            ("说明", _e(fence["detail"] or "-")),
+        ]
+    )
+    stats_note = "" if stats_available else (
+        '<p class="note">版本围栏未通过：有效读数与待重采统计不可用，'
+        "已提交帧仅保留用于诊断。</p>"
     )
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -148,13 +183,21 @@ def render_html(summary: dict[str, Any]) -> str:
 </section>
 
 <section>
+<h2>版本围栏</h2>
+<table><tbody>
+{fence_rows}
+</tbody></table>
+{stats_note}
+</section>
+
+<section>
 <h2>概览</h2>
 <div class="grid">
 {_metric('帧记录', totals['frames'])}
 {_metric('读数记录', totals['readings'])}
-{_metric('有效读数 good', totals['valid_readings'])}
+{_metric('有效读数 good', '不可用' if totals['valid_readings'] is None else totals['valid_readings'])}
 {_metric('问题记录', totals['issues'])}
-{_metric('待重采点位', totals['pending_points'])}
+{_metric('待重采点位', '不可用' if totals['pending_points'] is None else totals['pending_points'])}
 </div>
 </section>
 
