@@ -15,6 +15,9 @@ from .codec import BYTE_ORDERS_16, BYTE_ORDERS_32, DATA_TYPES, REGISTER_COUNTS
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
+# Business-authorised planning objectives for offline recollect planning.
+RECOLLECT_OBJECTIVES = ("priority", "coverage")
+
 
 class ContractError(ValueError):
     """A static contract error; raised before any batch is written."""
@@ -53,6 +56,8 @@ class PointContract:
     range_max: float
     enum: dict[int, str] = field(default_factory=dict)
     description: str = ""
+    recollect_priority: int | None = None
+    recollect_ttl_seconds: float | None = None
 
     @property
     def match_key(self) -> tuple[int, int, int, int]:
@@ -64,12 +69,24 @@ class PointContract:
 
 
 @dataclass(frozen=True)
+class RecollectConfig:
+    """Bus-window budget and objective for offline recollect planning."""
+
+    objective: str
+    max_requests: int
+    device_cooldown_s: float
+    request_cost_s: float
+    window_seconds: float | None
+
+
+@dataclass(frozen=True)
 class ContractSet:
     version: int
     devices: tuple[Device, ...]
     points: tuple[PointContract, ...]
     by_match: dict[tuple[int, int, int, int], PointContract]
     by_key: dict[str, PointContract]
+    recollect: RecollectConfig | None = None
 
     def find(self, slave_id: int, function: int, start: int, count: int):
         return self.by_match.get((slave_id, function, start, count))
@@ -168,6 +185,24 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
     _require(isinstance(description, str), "contract_point",
              "description must be a string", location)
     enum = _parse_enum(raw.get("enum"), location, data_type)
+    recollect_priority = raw.get("recollect_priority")
+    if recollect_priority is not None:
+        _require(
+            isinstance(recollect_priority, int)
+            and not isinstance(recollect_priority, bool)
+            and 0 <= recollect_priority <= 9,
+            "contract_recollect",
+            "recollect_priority must be an integer in 0..9",
+            location,
+        )
+    recollect_ttl = raw.get("recollect_ttl_seconds")
+    if recollect_ttl is not None:
+        _require(
+            _number(recollect_ttl) and float(recollect_ttl) > 0,
+            "contract_recollect",
+            "recollect_ttl_seconds must be a positive finite number",
+            location,
+        )
     return PointContract(
         device_id=device_id,
         point_key=key,
@@ -184,6 +219,42 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
         range_max=range_max,
         enum=enum,
         description=description,
+        recollect_priority=recollect_priority,
+        recollect_ttl_seconds=None if recollect_ttl is None else float(recollect_ttl),
+    )
+
+
+def _parse_recollect(raw: Any, source: str) -> RecollectConfig | None:
+    if raw is None:
+        return None
+    location = f"{source}:recollect"
+    _require(isinstance(raw, dict), "contract_recollect",
+             "recollect must be a mapping", location)
+    objective = raw.get("objective")
+    _require(objective in RECOLLECT_OBJECTIVES, "contract_recollect",
+             f"recollect.objective must be one of {', '.join(RECOLLECT_OBJECTIVES)}",
+             location)
+    max_requests = raw.get("max_requests")
+    _require(isinstance(max_requests, int) and not isinstance(max_requests, bool)
+             and max_requests >= 0, "contract_recollect",
+             "recollect.max_requests must be a non-negative integer", location)
+    cooldown = raw.get("device_cooldown_s")
+    _require(_number(cooldown) and float(cooldown) >= 0, "contract_recollect",
+             "recollect.device_cooldown_s must be a non-negative finite number",
+             location)
+    cost = raw.get("request_cost_s", 1.0)
+    _require(_number(cost) and float(cost) > 0, "contract_recollect",
+             "recollect.request_cost_s must be a positive finite number", location)
+    window = raw.get("window_seconds")
+    if window is not None:
+        _require(_number(window) and float(window) > 0, "contract_recollect",
+                 "recollect.window_seconds must be a positive finite number", location)
+    return RecollectConfig(
+        objective=objective,
+        max_requests=max_requests,
+        device_cooldown_s=float(cooldown),
+        request_cost_s=float(cost),
+        window_seconds=None if window is None else float(window),
     )
 
 
@@ -230,12 +301,14 @@ def parse_contract(text: str, source: str = "<memory>") -> ContractSet:
             seen_keys.add(point.point_key)
             seen_matches.add(point.match_key)
             points.append(point)
+    recollect = _parse_recollect(root.get("recollect"), source)
     return ContractSet(
         version=version,
         devices=tuple(devices),
         points=tuple(points),
         by_match={point.match_key: point for point in points},
         by_key={point.point_key: point for point in points},
+        recollect=recollect,
     )
 
 

@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch": {
-    "id": "b_6db3b1425d1f_915981533aed",
+    "id": "b_6db3b1425d1f_e095b9204a50",
     "status": "completed",
-    "started_at": "2026-11-15T02:03:59Z",
-    "finished_at": "2026-11-15T02:04:03Z",
+    "started_at": "2026-11-16T19:19:41Z",
+    "finished_at": "2026-11-16T19:19:42Z",
     "total_lines": 19,
     "processed_lines": 19,
     "replay_file": "replay_demo.jsonl",
     "replay_sha256": "6db3b1425d1fa8a3bd5b755fa0cfae3b2294503e2d02bde3a7bea167414387aa",
     "contract_file": "points.yaml",
-    "contract_sha256": "915981533aed873f6933fc6194d6ef2ad79346c804b7b4a8e74c914abbe93326"
+    "contract_sha256": "e095b9204a50c4247d323fec2e68f5a7eee773260a10db2ebb4f9219a7280134"
   },
   "totals": {
     "frames": 19,
@@ -239,5 +239,228 @@
       ],
       "detail": "response CRC check failed"
     }
-  ]
+  ],
+  "recollect_plan": {
+    "schema_version": 1,
+    "objective": "coverage",
+    "base_time": "2026-11-16T19:19:42Z",
+    "budget": {
+      "max_requests": 4,
+      "device_cooldown_s": 0.25,
+      "request_cost_s": 0.05,
+      "window_seconds": 30
+    },
+    "usage": {
+      "pending_points": 7,
+      "covered_points": 4,
+      "uncovered_points": 3,
+      "requests_used": 4,
+      "requests_budget": 4,
+      "independent_failure_chances": 4,
+      "window_used_s": 0.7
+    },
+    "requests": [
+      {
+        "id": "r1",
+        "slave_id": 1,
+        "function": 3,
+        "start": 0,
+        "count": 2,
+        "request_hex": "010300000002c40b",
+        "covers": [
+          {
+            "device_id": "demo-gateway",
+            "point_key": "line_a_speed",
+            "priority": 5,
+            "expires_at": "2026-11-16T20:19:42Z"
+          }
+        ],
+        "incidental_points": [],
+        "failure_impact_points": 1,
+        "scheduled_start_s": 0,
+        "scheduled_end_s": 0.05
+      },
+      {
+        "id": "r2",
+        "slave_id": 1,
+        "function": 4,
+        "start": 10,
+        "count": 2,
+        "request_hex": "0104000a000251c9",
+        "covers": [
+          {
+            "device_id": "demo-gateway",
+            "point_key": "line_a_flow",
+            "priority": 4,
+            "expires_at": "2026-11-16T19:49:42Z"
+          }
+        ],
+        "incidental_points": [],
+        "failure_impact_points": 1,
+        "scheduled_start_s": 0.3,
+        "scheduled_end_s": 0.35
+      },
+      {
+        "id": "r3",
+        "slave_id": 2,
+        "function": 3,
+        "start": 20,
+        "count": 2,
+        "request_hex": "020300140002843c",
+        "covers": [
+          {
+            "device_id": "line-a",
+            "point_key": "line_a_level",
+            "priority": 2,
+            "expires_at": "2026-11-16T21:19:42Z"
+          }
+        ],
+        "incidental_points": [],
+        "failure_impact_points": 1,
+        "scheduled_start_s": 0.35,
+        "scheduled_end_s": 0.4
+      },
+      {
+        "id": "r4",
+        "slave_id": 2,
+        "function": 3,
+        "start": 24,
+        "count": 2,
+        "request_hex": "020300180002443f",
+        "covers": [
+          {
+            "device_id": "line-a",
+            "point_key": "line_a_voltage",
+            "priority": 2,
+            "expires_at": null
+          }
+        ],
+        "incidental_points": [],
+        "failure_impact_points": 1,
+        "scheduled_start_s": 0.65,
+        "scheduled_end_s": 0.7
+      }
+    ],
+    "points": [
+      {
+        "device_id": "demo-gateway",
+        "point_key": "line_a_flow",
+        "issue_codes": [
+          "exception_response"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          12
+        ],
+        "priority": 4,
+        "expires_at": "2026-11-16T19:49:42Z",
+        "status": "covered",
+        "covered_by": "r2",
+        "block": null
+      },
+      {
+        "device_id": "demo-gateway",
+        "point_key": "line_a_speed",
+        "issue_codes": [
+          "slave_mismatch"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          18
+        ],
+        "priority": 5,
+        "expires_at": "2026-11-16T20:19:42Z",
+        "status": "covered",
+        "covered_by": "r1",
+        "block": null
+      },
+      {
+        "device_id": "line-a",
+        "point_key": "line_a_energy",
+        "issue_codes": [
+          "missing_response"
+        ],
+        "occurrences": 1,
+        "line_numbers": [],
+        "priority": null,
+        "expires_at": "2026-11-17T19:19:42Z",
+        "status": "uncovered",
+        "covered_by": null,
+        "block": {
+          "code": "request_budget_exceeded",
+          "detail": "request budget exhausted by higher-ranked requests"
+        }
+      },
+      {
+        "device_id": "line-a",
+        "point_key": "line_a_level",
+        "issue_codes": [
+          "truncated_frame"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          16
+        ],
+        "priority": 2,
+        "expires_at": "2026-11-16T21:19:42Z",
+        "status": "covered",
+        "covered_by": "r3",
+        "block": null
+      },
+      {
+        "device_id": "line-a",
+        "point_key": "line_a_pressure",
+        "issue_codes": [
+          "bad_crc_request"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          14
+        ],
+        "priority": 1,
+        "expires_at": "2026-11-16T19:34:42Z",
+        "status": "uncovered",
+        "covered_by": null,
+        "block": {
+          "code": "request_budget_exceeded",
+          "detail": "request budget exhausted by higher-ranked requests"
+        }
+      },
+      {
+        "device_id": "line-a",
+        "point_key": "line_a_status",
+        "issue_codes": [
+          "byte_count_mismatch"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          17
+        ],
+        "priority": null,
+        "expires_at": null,
+        "status": "uncovered",
+        "covered_by": null,
+        "block": {
+          "code": "request_budget_exceeded",
+          "detail": "request budget exhausted by higher-ranked requests"
+        }
+      },
+      {
+        "device_id": "line-a",
+        "point_key": "line_a_voltage",
+        "issue_codes": [
+          "bad_crc_response"
+        ],
+        "occurrences": 1,
+        "line_numbers": [
+          13
+        ],
+        "priority": 2,
+        "expires_at": null,
+        "status": "covered",
+        "covered_by": "r4",
+        "block": null
+      }
+    ]
+  }
 }

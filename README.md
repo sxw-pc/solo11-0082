@@ -10,6 +10,7 @@
 - 支持请求帧/应答帧结构校验、CRC16/MODBUS 校验和异常应答识别。
 - 支持 `int16`、`uint16`、`int32`、`uint32`、`float32` 与确定性字节序解码。
 - 生成 SQLite 采集台账、JSON / Markdown / 自包含 HTML 报告、待重采 CSV。
+- 基于契约与总线预算的离线重采计划：请求合并、逐点覆盖关系、阻断原因与独立失败机会统计（`pointlog plan`）。
 - 支持基于回放文件指纹和行偏移的断点续采、幂等重跑。
 - 附带只读本地复核台，仅监听 `127.0.0.1`。
 
@@ -182,6 +183,7 @@ python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR]
 python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
+python -m pointlog plan BATCH_ID [--db PATH] [--contract PATH] [--objective priority|coverage] [--max-requests N] [--json]
 python -m pointlog serve [--db PATH] [--port 5000]
 ```
 
@@ -195,7 +197,9 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `--stop-after` | 调试用，处理 N 行后模拟中断，便于验证续采 |
 | `--no-report` | 仅入库，不写报告 |
 
-退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
+退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，批次不存在或未完成 `4`，模拟中断 `130`。
+
+`plan` 只为**已完成**批次生成离线重采计划：它读取待重采问题与当前契约，把同一从站/功能码下相邻且无未映射空洞的寄存器合并成不超过 125 寄存器的请求，在 `recollect` 段给出的请求预算、每设备冷却与窗口时长内选择可行请求集合，逐点标明覆盖请求或阻断原因，并统计独立失败机会数（一个失败请求影响其全部覆盖点位）。计划不连接设备、不发送任何帧；相同批次、契约和预算产生字节稳定的计划。
 
 ## SQLite 台账
 
@@ -216,7 +220,7 @@ python -m pointlog serve [--db PATH] [--port 5000]
 
 每次完整采集写入四个文件：
 
-- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单。
+- `reports/summary.json`：固定字段顺序的机器可读汇总，包含批次、指纹、总量、质量码分布、问题分布、按设备/点位统计、待重采清单；契约启用 `recollect` 段时附带 `recollect_plan` 重采计划。
 - `reports/summary.md`：人读摘要，包含同样的表格。
 - `reports/summary.html`：自包含 HTML，内联 CSS，不引用 CDN、外部字体、脚本或图片。
 - `reports/pending_recollect.csv`：按设备/点位/问题码聚合的待重采清单。

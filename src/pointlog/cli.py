@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .contract import ContractError
+from .contract import ContractError, load_contract
 from .fixtures_gen import generate_demo_replay
 from .pipeline import IngestInterrupted, PipelineError, RunResult, run_capture
+from .recollect_plan import build_recollect_plan
 from .replay import ReplayError
 from .resume import ResumeRejected
 from .server import serve
@@ -149,6 +151,76 @@ def _serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_plan(plan: dict) -> None:
+    usage = plan["usage"]
+    budget = plan["budget"]
+    window = budget["window_seconds"]
+    print("重采计划（离线规划：未连接设备、未发送任何帧）")
+    print(f"规划目标:     {plan['objective']}")
+    print(f"请求预算:     {usage['requests_used']}/{budget['max_requests']}")
+    window_text = "-" if window is None else f"{usage['window_used_s']}s / {window}s"
+    print(f"窗口用量:     {window_text}（每设备冷却 {budget['device_cooldown_s']}s）")
+    print(f"覆盖点位:     {usage['covered_points']}/{usage['pending_points']}")
+    print(f"独立失败机会: {usage['independent_failure_chances']}")
+    if plan["requests"]:
+        print("计划请求:")
+        for request in plan["requests"]:
+            covers = ", ".join(
+                f"{item['device_id']}/{item['point_key']}" for item in request["covers"]
+            )
+            print(
+                f"  {request['id']}  slave={request['slave_id']} "
+                f"func={request['function']} start={request['start']} "
+                f"count={request['count']}  覆盖: {covers}  "
+                f"帧: {request['request_hex']}"
+            )
+    uncovered = [point for point in plan["points"] if point["status"] == "uncovered"]
+    if uncovered:
+        print("未覆盖点位:")
+        for point in uncovered:
+            block = point["block"] or {}
+            name = f"{point['device_id']}/{point['point_key']}"
+            print(f"  {name}  {block.get('code', '')}  {block.get('detail', '')}")
+
+
+def _plan_command(args: argparse.Namespace) -> int:
+    if args.max_requests is not None and args.max_requests < 0:
+        print("--max-requests 必须是非负整数", file=sys.stderr)
+        return 2
+    store = _open_store(args.db)
+    try:
+        batch = store.get_batch(args.batch_id)
+        if batch is None:
+            print(f"批次不存在: {args.batch_id}", file=sys.stderr)
+            return 4
+        if batch["status"] != "completed":
+            print(
+                f"批次未完成: {args.batch_id} 状态为 {batch['status']}，"
+                "重采计划只针对已完成批次",
+                file=sys.stderr,
+            )
+            return 4
+        contract = load_contract(args.contract or batch["contract_path"])
+        if contract.recollect is None:
+            print("契约未启用重采规划：缺少顶层 recollect 段", file=sys.stderr)
+            return 2
+        plan = build_recollect_plan(
+            pending_recollect(store, batch["id"]),
+            contract,
+            contract.recollect,
+            base_time=batch["finished_at"] or batch["started_at"],
+            objective=args.objective,
+            max_requests=args.max_requests,
+        )
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+    else:
+        _print_plan(plan)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pointlog", description="点位采录台 · 离线寄存器帧回放采集"
@@ -187,6 +259,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db(show)
     show.add_argument("batch_id")
     show.set_defaults(func=_show_command)
+
+    plan = sub.add_parser("plan", help="为已完成批次生成离线重采计划（不连接设备）")
+    _add_db(plan)
+    plan.add_argument("batch_id")
+    plan.add_argument("--contract", default=None,
+                      help="点位契约路径（默认使用批次记录的契约）")
+    plan.add_argument("--objective", choices=["priority", "coverage"], default=None,
+                      help="覆盖契约中的规划目标")
+    plan.add_argument("--max-requests", type=int, default=None,
+                      help="覆盖契约中的请求预算")
+    plan.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    plan.set_defaults(func=_plan_command)
 
     serve_parser = sub.add_parser("serve", help="启动只读本地复核台")
     _add_db(serve_parser)

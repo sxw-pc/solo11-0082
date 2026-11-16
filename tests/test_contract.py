@@ -41,6 +41,36 @@ def test_loads_demo_contract():
     assert contract.device_label("missing") == "missing"
 
 
+def test_demo_contract_recollect_fields():
+    contract = load_contract(CONFIG)
+    recollect = contract.recollect
+    assert recollect is not None
+    assert recollect.objective == "coverage"
+    assert recollect.max_requests == 4
+    assert recollect.device_cooldown_s == 0.25
+    assert recollect.request_cost_s == 0.05
+    assert recollect.window_seconds == 30
+    speed = contract.get("line_a_speed")
+    assert speed.recollect_priority == 5
+    assert speed.recollect_ttl_seconds == 3600
+    mode = contract.get("line_a_mode")
+    assert mode.recollect_priority is None
+    assert mode.recollect_ttl_seconds is None
+
+
+def test_contract_without_recollect_section_parses_as_none():
+    def mutate(raw):
+        raw.pop("recollect")
+        for device in raw["devices"]:
+            for item in device["points"]:
+                item.pop("recollect_priority", None)
+                item.pop("recollect_ttl_seconds", None)
+
+    contract = parse_contract(contract_text(mutate))
+    assert contract.recollect is None
+    assert all(point.recollect_priority is None for point in contract.points)
+
+
 @pytest.mark.parametrize(
     ("mutator", "code"),
     [
@@ -68,6 +98,30 @@ def test_loads_demo_contract():
          "contract_enum"),
         (lambda raw: point(raw, "line_a_mode").update(enum={0: ""}), "contract_enum"),
         (lambda raw: point(raw, "line_a_flow").update(enum={0: "zero"}), "contract_enum"),
+        (lambda raw: point(raw, "line_a_speed").update(recollect_priority=10),
+         "contract_recollect"),
+        (lambda raw: point(raw, "line_a_speed").update(recollect_priority="high"),
+         "contract_recollect"),
+        (lambda raw: point(raw, "line_a_speed").update(recollect_ttl_seconds=0),
+         "contract_recollect"),
+        (lambda raw: point(raw, "line_a_speed").update(recollect_ttl_seconds="1h"),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(objective="balanced"),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(max_requests=-1),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(max_requests=1.5),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].pop("max_requests"),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(device_cooldown_s=-0.5),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(request_cost_s=0),
+         "contract_recollect"),
+        (lambda raw: raw["recollect"].update(window_seconds="30"),
+         "contract_recollect"),
+        (lambda raw: raw.update(recollect=["coverage"]),
+         "contract_recollect"),
     ],
 )
 def test_static_validation_rejects_bad_contracts(mutator, code):

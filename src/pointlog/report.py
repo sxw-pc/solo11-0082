@@ -32,6 +32,57 @@ def _yes(value: bool) -> str:
     return "是" if value else "否"
 
 
+def _render_recollect_plan(plan: dict[str, Any]) -> list[str]:
+    usage = plan["usage"]
+    budget = plan["budget"]
+    window = budget["window_seconds"]
+    lines = [
+        "",
+        "## 重采计划",
+        "",
+        "> 离线规划：未连接设备、未发送任何帧；任一请求失败会同时影响其覆盖的全部点位。",
+        "",
+        _table(["指标", "值"], [
+            ["规划目标", plan["objective"]],
+            ["请求预算（已用/上限）", f"{usage['requests_used']}/{budget['max_requests']}"],
+            ["独立失败机会", usage["independent_failure_chances"]],
+            ["覆盖点位（已覆盖/待重采）", f"{usage['covered_points']}/{usage['pending_points']}"],
+            ["窗口用量（秒，已用/上限）",
+             f"{usage['window_used_s']} / {window if window is not None else '-'}"],
+            ["每设备冷却（秒）", budget["device_cooldown_s"]],
+        ]),
+        "",
+        "### 计划请求",
+        "",
+    ]
+    if plan["requests"]:
+        lines.append(_table(
+            ["请求", "从站", "功能", "起始", "数量", "覆盖点位", "附带点位",
+             "计划时刻(秒)", "请求帧(hex)"],
+            [[request["id"], request["slave_id"], request["function"],
+              request["start"], request["count"],
+              ", ".join(f"{item['device_id']}/{item['point_key']}"
+                        for item in request["covers"]),
+              ", ".join(request["incidental_points"]) or "-",
+              f"{request['scheduled_start_s']}–{request['scheduled_end_s']}",
+              request["request_hex"]] for request in plan["requests"]],
+        ))
+    else:
+        lines.append("无可行请求。")
+    lines += ["", "### 未覆盖点位", ""]
+    uncovered = [point for point in plan["points"] if point["status"] == "uncovered"]
+    if uncovered:
+        lines.append(_table(
+            ["设备", "点位", "阻断原因", "说明"],
+            [[point["device_id"] or "-", point["point_key"] or "-",
+              (point["block"] or {}).get("code", ""),
+              (point["block"] or {}).get("detail", "")] for point in uncovered],
+        ))
+    else:
+        lines.append("全部待重采点位均已覆盖。")
+    return lines
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -108,6 +159,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ))
     else:
         lines.append("无待重采点位。")
+    plan = summary.get("recollect_plan")
+    if plan is not None:
+        lines += _render_recollect_plan(plan)
     lines.append("")
     return "\n".join(lines)
 

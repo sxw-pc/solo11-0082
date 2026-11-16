@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import ContractSet
+from .recollect_plan import build_recollect_plan
 from .store import Store
 from .store_queries import (
     batch_totals,
@@ -31,7 +32,7 @@ def collect_summary(
     pending = pending_recollect(store, batch_id)
     quality = quality_distribution(store, batch_id)
     issues = issue_distribution(store, batch_id)
-    return {
+    summary: dict[str, Any] = {
         "schema_version": 1,
         "batch": {
             "id": batch["id"],
@@ -58,3 +59,13 @@ def collect_summary(
         "points": point_stats(store, batch_id, contract),
         "pending_recollect": pending,
     }
+    if contract.recollect is not None:
+        # Pending statistics reference the selected request coverage and the
+        # number of independent failure chances, not just raw issue rows.
+        summary["recollect_plan"] = build_recollect_plan(
+            pending,
+            contract,
+            contract.recollect,
+            base_time=batch["finished_at"] or batch["started_at"],
+        )
+    return summary

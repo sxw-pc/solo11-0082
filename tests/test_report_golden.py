@@ -15,6 +15,7 @@ def test_json_summary_has_stable_shape(demo_run):
         "devices",
         "points",
         "pending_recollect",
+        "recollect_plan",
     ]
     assert list(summary["batch"]) == [
         "id", "status", "started_at", "finished_at", "total_lines",
@@ -40,18 +41,48 @@ def test_json_summary_has_stable_shape(demo_run):
     assert len(summary["pending_recollect"]) == 7
 
 
+def test_json_summary_recollect_plan(demo_run):
+    summary = json.loads((demo_run.paths.reports / "summary.json").read_text(encoding="utf-8"))
+    plan = summary["recollect_plan"]
+    assert plan["objective"] == "coverage"
+    assert plan["budget"]["max_requests"] == 4
+    usage = plan["usage"]
+    assert usage["pending_points"] == 7
+    assert usage["covered_points"] == 4
+    assert usage["uncovered_points"] == 3
+    assert usage["requests_used"] == usage["requests_budget"] == 4
+    assert usage["independent_failure_chances"] == 4
+    request_ids = {request["id"] for request in plan["requests"]}
+    assert request_ids == {"r1", "r2", "r3", "r4"}
+    covered = [point for point in plan["points"] if point["status"] == "covered"]
+    assert all(point["covered_by"] in request_ids for point in covered)
+    blocked = {
+        point["point_key"]: point["block"]["code"]
+        for point in plan["points"]
+        if point["status"] == "uncovered"
+    }
+    assert blocked == {
+        "line_a_pressure": "request_budget_exceeded",
+        "line_a_status": "request_budget_exceeded",
+        "line_a_energy": "request_budget_exceeded",
+    }
+
+
 def test_markdown_golden_fragments(demo_run):
     text = (demo_run.paths.reports / "summary.md").read_text(encoding="utf-8")
     assert text.startswith("# 点位采录台采集报告\n")
     for heading in ("## 批次信息", "## 概览", "## 质量码分布",
                     "## 问题分布", "## 按设备统计", "## 按点位统计",
-                    "## 待重采点位"):
+                    "## 待重采点位", "## 重采计划",
+                    "### 计划请求", "### 未覆盖点位"):
         assert heading in text
     assert "| good | info | 否 | 8 |" in text
     assert "| bad_frame | error | 是 | 3 |" in text
     assert "| missing_response | warning | 是 | 1 |" in text
     assert "| line_a_energy | missing_response | missing_response | 1 | - |" in text
     assert "| demo-gateway | line_a_speed | slave_mismatch | bad_frame | 1 | 18 |" in text
+    assert "request_budget_exceeded" in text
+    assert "| 独立失败机会 | 4 |" in text
 
 
 def test_html_is_self_contained(demo_run):
@@ -60,7 +91,9 @@ def test_html_is_self_contained(demo_run):
     assert "<style>" in text
     assert "质量码分布" in text
     assert "待重采点位" in text
+    assert "重采计划" in text
     assert "bad_crc_request" in text
+    assert "request_budget_exceeded" in text
     assert "http://" not in text
     assert "https://" not in text
     assert "<script" not in text

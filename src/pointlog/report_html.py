@@ -73,6 +73,63 @@ def _severity(value: str) -> str:
     return f'<span class="{css}">{_e(value)}</span>'
 
 
+def _render_recollect_plan(plan: dict[str, Any] | None) -> str:
+    if plan is None:
+        return ""
+    usage = plan["usage"]
+    budget = plan["budget"]
+    window = budget["window_seconds"]
+    request_rows = [
+        [f"<code>{_e(request['id'])}</code>",
+         _e(request["slave_id"]), _e(request["function"]),
+         _e(request["start"]), _e(request["count"]),
+         "<code>" + _e(", ".join(
+             f"{item['device_id']}/{item['point_key']}"
+             for item in request["covers"]
+         )) + "</code>",
+         _e(", ".join(request["incidental_points"]) or "-"),
+         _e(f"{request['scheduled_start_s']}–{request['scheduled_end_s']}"),
+         f"<code>{_e(request['request_hex'])}</code>"]
+        for request in plan["requests"]
+    ]
+    uncovered_rows = [
+        [f"<code>{_e(point['device_id'] or '-')}</code>",
+         f"<code>{_e(point['point_key'] or '-')}</code>",
+         f"<code>{_e((point['block'] or {}).get('code', ''))}</code>",
+         _e((point["block"] or {}).get("detail", ""))]
+        for point in plan["points"]
+        if point["status"] == "uncovered"
+    ]
+    requests_table = (
+        _table(['请求', '从站', '功能', '起始', '数量', '覆盖点位', '附带点位',
+                '计划时刻 秒', '请求帧 hex'], request_rows)
+        if request_rows
+        else '<p class="note">无可行请求。</p>'
+    )
+    uncovered_block = (
+        _table(['设备', '点位', '阻断原因', '说明'], uncovered_rows)
+        if uncovered_rows
+        else '<p class="note">全部待重采点位均已覆盖。</p>'
+    )
+    return f"""
+<section>
+<h2>重采计划</h2>
+<p class="note">离线规划：未连接设备、未发送任何帧；任一请求失败会同时影响其覆盖的全部点位。</p>
+<div class="grid">
+{_metric('规划目标', plan['objective'])}
+{_metric('请求预算 已用/上限', f"{usage['requests_used']}/{budget['max_requests']}")}
+{_metric('独立失败机会', usage['independent_failure_chances'])}
+{_metric('覆盖点位 已覆盖/待重采', f"{usage['covered_points']}/{usage['pending_points']}")}
+{_metric('窗口用量 秒', f"{usage['window_used_s']} / {window if window is not None else '-'}")}
+</div>
+<h2>计划请求</h2>
+{requests_table}
+<h2>未覆盖点位</h2>
+{uncovered_block}
+</section>
+"""
+
+
 def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -118,6 +175,7 @@ def render_html(summary: dict[str, Any]) -> str:
         if pending_rows
         else '<p class="note">本次采集没有待重采点位。</p>'
     )
+    plan_section = _render_recollect_plan(summary.get("recollect_plan"))
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -184,6 +242,7 @@ def render_html(summary: dict[str, Any]) -> str:
 {_table(['设备', '点位', '问题码', '质量码', '次数', '行号', '说明'], pending_rows)}
 </section>
 
+{plan_section}
 <footer>
 本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。
 所有帧、设备名、点位与时间戳均为合成 fixture。

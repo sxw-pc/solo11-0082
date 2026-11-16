@@ -1,4 +1,10 @@
 version: 1
+recollect:
+  objective: coverage
+  max_requests: 4
+  device_cooldown_s: 0.25
+  request_cost_s: 0.05
+  window_seconds: 30
 devices:
   - id: demo-gateway
     label: Demo Gateway (synthetic line A controller)
@@ -15,6 +21,8 @@ devices:
         unit: rpm
         range: [0, 3000]
         description: Synthetic line A drive speed.
+        recollect_priority: 5
+        recollect_ttl_seconds: 3600
       - key: line_a_temperature
         slave_id: 1
         function: 3
@@ -27,6 +35,7 @@ devices:
         unit: degC
         range: [-40, 150]
         description: Synthetic bearing temperature.
+        recollect_priority: 3
       - key: line_a_mode
         slave_id: 1
         function: 3
@@ -55,6 +64,8 @@ devices:
         unit: m3/h
         range: [0, 500]
         description: Synthetic input flow.
+        recollect_priority: 4
+        recollect_ttl_seconds: 1800
   - id: line-a
     label: Line A synthetic remote I/O
     points:
@@ -70,6 +81,8 @@ devices:
         unit: m
         range: [0, 20]
         description: Synthetic tank level.
+        recollect_priority: 2
+        recollect_ttl_seconds: 7200
       - key: line_a_voltage
         slave_id: 2
         function: 3
@@ -82,6 +95,7 @@ devices:
         unit: V
         range: [0, 400]
         description: Synthetic bus voltage.
+        recollect_priority: 2
       - key: line_a_pressure
         slave_id: 2
         function: 4
@@ -94,6 +108,8 @@ devices:
         unit: kPa
         range: [0, 1000]
         description: Synthetic discharge pressure.
+        recollect_priority: 1
+        recollect_ttl_seconds: 900
       - key: line_a_status
         slave_id: 2
         function: 3
@@ -121,3 +137,4 @@ devices:
         unit: kWh
         range: [0, 1000000]
         description: Deliberately absent from the demo replay.
+        recollect_ttl_seconds: 86400
