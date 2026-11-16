@@ -10,6 +10,14 @@ from pathlib import Path
 
 from .contract import ContractError
 from .fixtures_gen import generate_demo_replay
+from .min_replay import (
+    DEVICE_MODE,
+    TARGET_MODE,
+    MinReplayError,
+    TargetSpec,
+    find_min_replay,
+    write_min_replay_bundle,
+)
 from .pipeline import IngestInterrupted, PipelineError, RunResult, run_capture
 from .replay import ReplayError
 from .resume import ResumeRejected
@@ -149,6 +157,49 @@ def _serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _min_replay_command(args: argparse.Namespace) -> int:
+    targets = tuple(
+        TargetSpec(
+            device_id=device,
+            point_key=point,
+            issue_code=args.issue_code,
+            quality_code=args.quality_code,
+            ts=args.ts,
+        )
+        for device, point in args.target
+    )
+    result = find_min_replay(
+        batch_db_path=args.db,
+        batch_id=args.batch_id,
+        targets=targets,
+        mode=args.mode,
+        max_input_lines=args.max_lines,
+    )
+    bundle = write_min_replay_bundle(result, args.output)
+    print(f"模式:         {result.mode}")
+    print(f"保证:         {result.guarantee}")
+    print(f"原始回放 SHA: {result.original_replay_sha256}")
+    print(f"子回放 SHA:   {result.sub_replay_sha256}")
+    print(f"契约 SHA:     {result.contract_sha256}")
+    print(f"行数:         {result.sub_line_count}/{result.total_input_lines}")
+    mapping_text = ", ".join(
+        "{}<-原{}".format(item["sub_line_no"], item["original_line_no"])
+        for item in result.line_mapping
+    )
+    print("行号映射:     " + mapping_text)
+    induced = result.synthetic_missing["induced_by_subset"]
+    if induced:
+        print("子集导致的合成缺失（line_no=0，非原始帧问题）:")
+        for row in induced:
+            print(
+                f"  {row['device_id']}/{row['point_key']} "
+                f"{row['issue_code']} {row['quality_code']}"
+            )
+    print(f"子回放:       {bundle['sub_replay']}")
+    print(f"证明:         {bundle['proof']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pointlog", description="点位采录台 · 离线寄存器帧回放采集"
@@ -192,6 +243,36 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db(serve_parser)
     serve_parser.add_argument("--port", type=int, default=5000)
     serve_parser.set_defaults(func=_serve_command)
+
+    min_replay = sub.add_parser(
+        "min-replay",
+        help="为目标 issue 生成最短可复现子回放与验证证明（本机诊断）",
+    )
+    _add_db(min_replay)
+    min_replay.add_argument("batch_id", help="已完成批次 ID")
+    min_replay.add_argument(
+        "--target",
+        action="append",
+        nargs=2,
+        metavar=("DEVICE_ID", "POINT_KEY"),
+        required=True,
+        help="目标业务身份的设备/点位，可重复传入以复现多个 issue",
+    )
+    min_replay.add_argument("--issue-code", required=True)
+    min_replay.add_argument("--quality-code", required=True)
+    min_replay.add_argument("--ts", required=True, help="目标 issue 的时间戳（合成缺失传空字符串）")
+    min_replay.add_argument(
+        "--mode",
+        choices=(TARGET_MODE, DEVICE_MODE),
+        default=TARGET_MODE,
+        help="target=只保留目标 issue；device=保留该设备完整问题码/待重采分布",
+    )
+    min_replay.add_argument(
+        "--max-lines", type=int, default=12,
+        help="精确搜索的最大输入行数，超过则拒绝",
+    )
+    min_replay.add_argument("--output", required=True, help="证明包输出目录")
+    min_replay.set_defaults(func=_min_replay_command)
     return parser
 
 
@@ -208,6 +289,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ReplayError as exc:
         print(f"回放文件错误: [{exc.code}] {exc.detail}", file=sys.stderr)
         return 2
+    except MinReplayError as exc:
+        print(f"最短子回放失败: [{exc.code}] {exc.detail}", file=sys.stderr)
+        return 4
     except PipelineError as exc:
         print(f"采集失败: [{exc.code}] {exc.detail}", file=sys.stderr)
         return 1

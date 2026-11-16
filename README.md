@@ -183,7 +183,10 @@ python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
 python -m pointlog serve [--db PATH] [--port 5000]
+python -m pointlog min-replay BATCH_ID --target DEVICE POINT --issue-code CODE --quality-code CODE --ts TS [--mode target|device] [--max-lines 12] --output DIR [--db PATH]
 ```
+
+`min-replay` 用于供应商排查：在**不改动**原批次、原回放与契约的前提下，为指定 issue 的业务身份（设备/点位/问题码/质量码/时间戳）生成最短可复现子回放。候选只保留原 JSONL 的完整物理行并保持相对顺序，每个候选都在隔离 SQLite 中经原 `run_capture()` 完整重放验证；证明包 `proof.json` 含原/子回放 SHA、契约 SHA、目标身份、重编号行号到原行号的映射、重放报告差异、line_no=0 合成缺失的单独说明与最小性证明。`--mode target` 只保留目标 issue；`--mode device` 额外保留该设备完整的问题码/待重采点位分布。输入超过 `--max-lines`（默认 12）时明确拒绝，不返回无法保证最短的贪心结果；重复运行输出字节稳定。退出码 4 表示最短子回放诊断错误（含超限）。
 
 | 参数 | 说明 |
 | --- | --- |

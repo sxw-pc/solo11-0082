@@ -30,11 +30,32 @@ from .store import Store
 from .util import frame_summary, normalize_number
 
 
+#: Line number assigned to issues synthesized for contract points that never
+#: appeared in the replay (there is no physical frame to point at).
+SYNTHETIC_LINE_NO = 0
+
+
 @dataclass
 class ProcessedLine:
     frame: dict[str, Any]
     issues: list[dict[str, Any]] = field(default_factory=list)
     reading: dict[str, Any] | None = None
+
+
+def issue_identity(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Canonical business identity of a persisted issue row.
+
+    Matching on this full tuple (device, point, issue code, quality code and
+    timestamp) prevents an issue with the same code on a different point from
+    being mistaken for a successful reproduction.
+    """
+    return (
+        str(row["device_id"]),
+        str(row["point_key"]),
+        str(row["issue_code"]),
+        str(row["quality_code"]),
+        str(row["ts"]),
+    )
 
 
 def _base_frame(line: ReplayLine) -> dict[str, Any]:

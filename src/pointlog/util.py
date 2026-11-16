@@ -62,6 +62,25 @@ def atomic_write_text(path: str | Path, text: str) -> Path:
     return target
 
 
+def atomic_write_bytes(path: str | Path, data: bytes) -> Path:
+    """Write bytes atomically in the target directory (works on Windows)."""
+    target = ensure_parent(path)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(temp_name, target)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return target
+
+
 def frame_summary(value: str | bytes, limit: int = 48) -> str:
     """Build a short, deterministic frame excerpt for issue rows."""
     if isinstance(value, bytes):

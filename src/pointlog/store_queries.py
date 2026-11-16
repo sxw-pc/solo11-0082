@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contract import ContractSet
+from .lineproc import SYNTHETIC_LINE_NO, issue_identity
 from .quality import QUALITY_ORDER, severity
 from .store import Store
 
@@ -212,4 +213,85 @@ def batch_totals(store: Store, batch_id: str) -> dict[str, int]:
         "valid_readings": int(good_count),
         "issues": int(issue_count),
         "pending_points": pending_point_count(store, batch_id),
+    }
+
+
+def issue_identity_set(store: Store, batch_id: str) -> set[tuple[str, str, str, str, str]]:
+    """All issue business identities (device, point, issue, quality, ts).
+
+    The full tuple is used for reproduction matching so that an issue code
+    emitted for a different point can never count as a hit.
+    """
+    rows = store.conn.execute(
+        "SELECT device_id, point_key, issue_code, quality_code, ts "
+        "FROM issues WHERE batch_id = ?",
+        (batch_id,),
+    ).fetchall()
+    return {issue_identity(row) for row in rows}
+
+
+def find_issue_row(
+    store: Store,
+    batch_id: str,
+    *,
+    device_id: str,
+    point_key: str,
+    issue_code: str,
+    quality_code: str,
+    ts: str,
+) -> dict[str, Any] | None:
+    row = store.conn.execute(
+        "SELECT * FROM issues WHERE batch_id = ? AND device_id = ? AND point_key = ? "
+        "AND issue_code = ? AND quality_code = ? AND ts = ? LIMIT 1",
+        (batch_id, device_id, point_key, issue_code, quality_code, ts),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def synthetic_missing_issues(store: Store, batch_id: str) -> list[dict[str, Any]]:
+    """line-0 ``missing_response`` issues synthesized because a contract point
+    never appeared; these are pipeline bookkeeping, not physical frame defects.
+    """
+    rows = store.conn.execute(
+        "SELECT * FROM issues WHERE batch_id = ? AND line_no = ? "
+        "ORDER BY device_id, point_key, issue_code, quality_code, ts",
+        (batch_id, SYNTHETIC_LINE_NO),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def device_issue_profile(
+    store: Store, batch_id: str, device_id: str
+) -> dict[str, Any]:
+    """Full issue-code / quality-code / pending-point picture for one device.
+
+    Used by device-wide preservation mode: a sub-replay keeps the device
+    picture only when the grouped issue identities (including line-0 synthetic
+    missing responses) and the pending-recollect point set are identical.
+    """
+    rows = store.conn.execute(
+        "SELECT * FROM issues WHERE batch_id = ? AND device_id = ?",
+        (batch_id, device_id),
+    ).fetchall()
+    identities = sorted(issue_identity(row) for row in rows)
+    issue_codes: dict[str, int] = {}
+    quality_codes: dict[str, int] = {}
+    pending_points: set[tuple[str, str]] = set()
+    synthetic: list[tuple[str, str, str, str, str]] = []
+    for row in rows:
+        issue_codes[row["issue_code"]] = issue_codes.get(row["issue_code"], 0) + 1
+        quality_codes[row["quality_code"]] = (
+            quality_codes.get(row["quality_code"], 0) + 1
+        )
+        if row["pending_collect"]:
+            pending_points.add((row["device_id"], row["point_key"]))
+        if row["line_no"] == SYNTHETIC_LINE_NO:
+            synthetic.append(issue_identity(row))
+    return {
+        "device_id": device_id,
+        "issue_code_distribution": dict(sorted(issue_codes.items())),
+        "quality_code_distribution": dict(sorted(quality_codes.items())),
+        "pending_points": sorted(pending_points),
+        "issue_identities": identities,
+        "synthetic_identities": sorted(synthetic),
     }

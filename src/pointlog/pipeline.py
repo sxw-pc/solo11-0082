@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .contract import ContractSet, load_contract
-from .lineproc import process_line
+from .lineproc import SYNTHETIC_LINE_NO, process_line
 from .quality import severity
 from .replay import ReplaySource, load_replay
 from .resume import ResumePlan, plan_resume
@@ -56,7 +58,7 @@ def _missing_contract_issues(
         if point.point_key in seen_points:
             continue
         store.add_issue(batch_id, {
-            "line_no": 0,
+            "line_no": SYNTHETIC_LINE_NO,
             "device_id": point.device_id,
             "point_key": point.point_key,
             "issue_code": "missing_response",
@@ -227,3 +229,34 @@ def run_capture(
         )
     finally:
         store.close()
+
+
+def run_isolated_capture(
+    *,
+    replay_path: str | Path,
+    contract_path: str | Path,
+    work_dir: str | Path,
+    now_factory: Callable[[], str] | None = None,
+) -> tuple[RunResult, Path]:
+    """Replay one (sub-)replay into a brand-new isolated SQLite ledger.
+
+    The whole original ``run_capture`` pipeline runs untouched against a fresh
+    database, so CRC/frame/no-contract/duplicate priority and the line-0
+    synthetic ``missing_response`` issues are produced by exactly the same code
+    path as a production batch. The database path is returned for read-only
+    inspection and is meant to be deleted by the caller.
+    """
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    fd, db_name = tempfile.mkstemp(prefix="isolated-", suffix=".db", dir=str(work))
+    os.close(fd)
+    db_path = Path(db_name)
+    result = run_capture(
+        replay_path=replay_path,
+        contract_path=contract_path,
+        db_path=db_path,
+        reports_dir=None,
+        resume=False,
+        now_factory=now_factory or (lambda: "1970-01-01T00:00:00Z"),
+    )
+    return result, db_path
