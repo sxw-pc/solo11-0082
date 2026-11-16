@@ -115,11 +115,63 @@ devices:
 [contract_register_count] config/points.yaml:devices[1].points[1]: uint32 requires exactly 2 register(s)
 ```
 
-## 6. 契约指纹
+## 6. 校准版本表（可选）
+
+现场点位的 `scale`/`offset` 会按生效时刻换版。点位可以声明 `calibrations`
+校准：一组按登记时刻排序的**校准修订**，每个修订包含若干**版本**，每个版本有
+独立 `version_id`、`scale`/`offset` 和互不重叠的 UTC 生效区间（半开区间
+`[start, end)`，`end` 为 `null` 表示开放区间）。
+
+```yaml
+      - key: line_a_speed
+        # ... 常规点位字段 ...
+        calibrations:
+          - registered_at: "2025-03-01T08:00:00Z"   # 本修订的登记时刻
+            versions:
+              - version_id: cal-2025-03-a
+                scale: 0.1
+                offset: 0
+                effective:
+                  - ["2025-03-01T00:00:00Z", "2025-06-01T00:00:00Z"]
+          - registered_at: "2025-06-01T09:30:00Z"   # 较晚登记，替代旧修订的生效区间
+            versions:
+              - version_id: cal-2025-06-b
+                scale: 0.2
+                offset: 0
+                effective:
+                  - ["2025-03-01T00:00:00Z", null]
+```
+
+规则：
+
+- 同一修订内所有版本的生效区间必须互不重叠（重叠是契约错误
+  `contract_calibration_overlap`）；区间可以留有缺口。
+- `version_id` 在该点位的所有修订间唯一；每个修订的 `registered_at` 唯一。
+- 较晚登记的修订整体替代旧修订的生效区间映射；旧修订只作为证据保留，
+  解析时永远只看最新登记的修订。
+- 声明了校准表的点位只在 `replay.ts` 可解析为 UTC 且落入唯一生效区间时
+  产出工程值；缺口或不可解析时间戳记为 `calibration_unknown`（无法判定），
+  不会用邻近版本猜测。
+- 未声明校准表的点位仍使用静态 `scale`/`offset`，行为不变。
+
+## 7. 报告视图授权
+
+顶层可选 `report.views` 声明报告允许展示的业务视图，取值为
+`as_recorded`、`as_effective`：
+
+- `as_recorded`：固定展示首次采录时已登记校准得到的结论（原始 `readings`
+  行，永不更新）。
+- `as_effective`：展示按当前生效期映射重算后的最新派生结论
+  （`derived_readings` 表，只追加、可审计）。
+
+缺省时：契约含校准表则两个视图都展示，否则只展示 `as_recorded`（且不输出
+校准视图小节）。两个视图都不改变原始 CRC、`raw_value` 或来源文件摘要。
+
+## 8. 契约指纹
 
 批次保存契约文件的原始字节 sha256。即使语义相同，只要文件字节改变（包括注释、空白），指纹就会变化，可能产生新批次并导致续采拒绝。这样做优先保证“输入可追溯”和续采安全，而不是语义级归一化。
 
-## 7. 完整演示契约
+## 9. 完整演示契约
 
 `config/points.yaml` 是完整可运行示例，包含：
 
@@ -130,7 +182,7 @@ devices:
 - 量程与枚举；
 - 一个故意在回放中缺失的点位，用于验证 `missing_response`。
 
-## 8. 不支持的契约能力
+## 10. 不支持的契约能力
 
 - 位域、位掩码、字符串、数组、时间类型。
 - 一个响应拆分多个点位，或一个点位跨多个响应。

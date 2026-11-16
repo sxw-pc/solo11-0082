@@ -25,6 +25,31 @@ def utc_now_iso() -> str:
     )
 
 
+def parse_utc_timestamp(text: object) -> datetime | None:
+    """Parse an ISO 8601 timestamp into an aware UTC datetime.
+
+    Returns None when the value is not a string, cannot be parsed, or
+    carries no explicit timezone offset. A trailing ``Z`` is accepted.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    candidate = text.strip()
+    if candidate.endswith(("Z", "z")):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def format_utc(moment: datetime) -> str:
+    """Render an aware datetime as ISO 8601 in UTC with a trailing Z."""
+    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:

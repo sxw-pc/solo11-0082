@@ -11,6 +11,7 @@ from pathlib import Path
 from .contract import ContractError
 from .fixtures_gen import generate_demo_replay
 from .pipeline import IngestInterrupted, PipelineError, RunResult, run_capture
+from .recalibrate import RecalibrationInterrupted, run_recalibration
 from .replay import ReplayError
 from .resume import ResumeRejected
 from .server import serve
@@ -149,6 +150,25 @@ def _serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _recalibrate_command(args: argparse.Namespace) -> int:
+    result = run_recalibration(
+        db_path=args.db,
+        contract_path=args.contract,
+        batch_id=args.batch_id,
+        reports_dir=None if args.no_report else args.reports,
+        stop_after=args.stop_after,
+    )
+    print(f"批次:         {result.batch_id}")
+    print(f"契约 SHA:     {result.contract_sha256}")
+    print(f"校准点位读数: {result.considered}")
+    print(f"结论未变:     {result.unchanged}")
+    print(f"新增派生结论: {result.derived_created}")
+    print(f"已存在(幂等): {result.derived_existing}")
+    for name, path in result.report_paths.items():
+        print(f"报告[{name}]: {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pointlog", description="点位采录台 · 离线寄存器帧回放采集"
@@ -192,6 +212,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db(serve_parser)
     serve_parser.add_argument("--port", type=int, default=5000)
     serve_parser.set_defaults(func=_serve_command)
+
+    recalibrate = sub.add_parser(
+        "recalibrate", help="按最新登记的校准修订重算读数（只追加派生结论）"
+    )
+    recalibrate.add_argument("--contract", default=str(DEFAULT_CONFIG_PATH))
+    _add_db(recalibrate)
+    recalibrate.add_argument("--batch-id", default=None,
+                             help="目标批次；缺省为最新批次")
+    recalibrate.add_argument("--reports", default=str(DEFAULT_REPORTS_DIR))
+    recalibrate.add_argument("--no-report", action="store_true", help="不生成报告文件")
+    recalibrate.add_argument("--stop-after", type=int, default=None,
+                             help="调试用：处理 N 条校准读数后模拟中断")
+    recalibrate.set_defaults(func=_recalibrate_command)
     return parser
 
 
@@ -215,6 +248,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"采集已中断: 批次 {exc.batch_id} 已处理 {exc.processed_lines} 行；"
             "请使用 --resume 继续。",
+            file=sys.stderr,
+        )
+        return 130
+    except RecalibrationInterrupted as exc:
+        print(
+            f"重算已中断: 批次 {exc.batch_id} 已处理 {exc.considered} 条校准读数；"
+            "重新执行 recalibrate 即可幂等继续。",
             file=sys.stderr,
         )
         return 130

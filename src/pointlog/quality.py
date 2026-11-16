@@ -13,6 +13,7 @@ NO_CONTRACT = "no_contract"
 MISSING_RESPONSE = "missing_response"
 DUPLICATE = "duplicate"
 DECODE_ERROR = "decode_error"
+CALIBRATION_UNKNOWN = "calibration_unknown"
 OVERFLOW = "overflow"
 UNDER_RANGE = "under_range"
 NOT_IN_ENUM = "not_in_enum"
@@ -27,6 +28,7 @@ QUALITY_ORDER = (
     MISSING_RESPONSE,
     DUPLICATE,
     DECODE_ERROR,
+    CALIBRATION_UNKNOWN,
     OVERFLOW,
     UNDER_RANGE,
     NOT_IN_ENUM,
@@ -77,6 +79,12 @@ QUALITY_META: dict[str, dict[str, object]] = {
         "severity": "error",
         "pending_recollect": True,
         "description": "register payload could not be decoded deterministically",
+    },
+    CALIBRATION_UNKNOWN: {
+        "severity": "warning",
+        "pending_recollect": True,
+        "description": "no unique effective calibration version covers the "
+                       "reading timestamp (gap or unparseable timestamp)",
     },
     OVERFLOW: {
         "severity": "warning",

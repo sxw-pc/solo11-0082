@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import codec
-from .contract import ContractSet, PointContract
+from .contract import ContractSet, PointContract, resolve_calibration
 from .modbus import (
     FrameParseError,
     exception_description,
@@ -18,6 +18,7 @@ from .quality import (
     BAD_CRC_REQUEST,
     BAD_CRC_RESPONSE,
     BAD_FRAME,
+    CALIBRATION_UNKNOWN,
     DUPLICATE,
     GOOD,
     QualityFlags,
@@ -27,7 +28,7 @@ from .quality import (
 )
 from .replay import ReplayLine
 from .store import Store
-from .util import frame_summary, normalize_number
+from .util import format_utc, frame_summary, normalize_number, parse_utc_timestamp
 
 
 @dataclass
@@ -214,29 +215,79 @@ def process_line(
 
     try:
         raw_value = codec.decode_value(response.data, point.data_type, point.byte_order)
-        engineering = codec.apply_engineering(raw_value, point.scale, point.offset)
     except codec.CodecError as exc:
         return _fail(
             frame, line, issue_code=exc.code, quality_code="decode_error",
             summary=line.response_hex, detail=f"decode failed: {exc.detail}", point=point,
         )
 
-    engineering = normalize_number(engineering)
-    range_code = codec.classify_range(engineering, point.range_min, point.range_max)
+    # Calibration is resolved only after every frame-level CRC/protocol check
+    # has passed, so a bad frame is never recalibrated and its raw evidence
+    # stays untouched. An engineering value is produced only when replay.ts
+    # parses as UTC and falls into exactly one effective interval.
+    scale, offset = point.scale, point.offset
+    calibration_version_id = ""
+    calibration_registered_at = ""
+    calibration_detail = ""
+    calibration_known = True
+    if point.calibrations:
+        moment = parse_utc_timestamp(line.ts)
+        resolved = resolve_calibration(point, moment) if moment is not None else None
+        if resolved is None:
+            calibration_known = False
+            if moment is None:
+                calibration_detail = (
+                    f"replay timestamp {line.ts!r} is not a parseable UTC "
+                    "timestamp; calibration is undeterminable"
+                )
+            else:
+                calibration_detail = (
+                    f"no calibration version covers {line.ts} in the revision "
+                    f"registered {format_utc(point.calibrations[-1].registered_at)}; "
+                    "gaps are never filled from neighbouring versions"
+                )
+        else:
+            revision, version = resolved
+            scale, offset = version.scale, version.offset
+            calibration_version_id = version.version_id
+            calibration_registered_at = format_utc(revision.registered_at)
+
+    engineering: float | int | None = None
+    range_code = None
+    if calibration_known:
+        try:
+            engineering = normalize_number(
+                codec.apply_engineering(raw_value, scale, offset)
+            )
+        except codec.CodecError as exc:
+            return _fail(
+                frame, line, issue_code=exc.code, quality_code="decode_error",
+                summary=line.response_hex,
+                detail=f"engineering failed: {exc.detail}", point=point,
+            )
+        range_code = codec.classify_range(engineering, point.range_min, point.range_max)
+
     in_enum, label = codec.enum_label(point.enum, raw_value)
     duplicate = store.reading_exists(
         batch_id, point.device_id, point.point_key, line.ts
     )
-    quality = determine_quality(QualityFlags(
-        duplicate=duplicate,
-        overflow=range_code == "overflow",
-        under_range=range_code == "under_range",
-        not_in_enum=not in_enum,
-    ))
+    if not calibration_known and not duplicate:
+        quality = CALIBRATION_UNKNOWN
+    else:
+        quality = determine_quality(QualityFlags(
+            duplicate=duplicate,
+            overflow=range_code == "overflow",
+            under_range=range_code == "under_range",
+            not_in_enum=not in_enum,
+        ))
     frame["quality_code"] = quality
     if quality != GOOD:
         frame["issue_code"] = quality
-        frame["detail"] = _quality_detail(quality, engineering, point)
+        frame["detail"] = (
+            calibration_detail
+            if quality == CALIBRATION_UNKNOWN
+            else _quality_detail(quality, engineering, point)
+        )
         pending = is_pending(quality)
         issues = [_issue(
             line, issue_code=quality, quality_code=quality,
@@ -254,16 +305,20 @@ def process_line(
             "ts": line.ts,
             "line_no": line.line_no,
             "raw_value": raw_value,
-            "engineering_value": float(engineering),
+            "engineering_value": (
+                float(engineering) if engineering is not None else None
+            ),
             "unit": point.unit,
             "quality_code": quality,
             "enum_label": label,
             "source": line.source,
+            "calibration_version_id": calibration_version_id,
+            "calibration_registered_at": calibration_registered_at,
         }
     return ProcessedLine(frame=frame, issues=issues, reading=reading)
 
 
-def _quality_detail(quality: str, engineering: float, point: PointContract) -> str:
+def _quality_detail(quality: str, engineering: float | int | None, point: PointContract) -> str:
     if quality == "overflow":
         return f"engineering {engineering} > range maximum {point.range_max}"
     if quality == "under_range":

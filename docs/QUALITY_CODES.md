@@ -15,6 +15,7 @@
 | `missing_response` | 契约点位没有可用应答 | warning | 是 |
 | `duplicate` | 同批次同设备、同点位、同时间戳已存在读数 | warning | 否 |
 | `decode_error` | 负载无法按类型/字节序解码，或浮点非有限 | error | 是 |
+| `calibration_unknown` | 时间戳不可解析，或未落入任何校准生效区间（无法判定） | warning | 是 |
 | `overflow` | 工程值高于量程上限 | warning | 否 |
 | `under_range` | 工程值低于量程下限 | warning | 否 |
 | `not_in_enum` | 原始值不在枚举映射中 | warning | 否 |
@@ -34,10 +35,11 @@
 6. missing_response
 7. duplicate
 8. decode_error
-9. overflow
-10. under_range
-11. not_in_enum
-12. good
+9. calibration_unknown
+10. overflow
+11. under_range
+12. not_in_enum
+13. good
 ```
 
 关键要求：
@@ -46,6 +48,7 @@
 - **异常应答优先于解码错误**：异常帧没有正常数据负载，应在任何解码前终止。
 - **结构错误优先于 CRC**：截断或长度错误时通常没有可信的 CRC 字段；`bad_frame` 是最高优先级。
 - **重复优先于值质量问题**：同一读数重复出现时不再重复入库，质量记录为 `duplicate`。
+- **帧级 CRC/协议问题优先于校准判定**：只有全部协议检查通过的帧才做校准版本解析；校准缺口或不可解析时间戳记为 `calibration_unknown`，不会用邻近版本猜测，也不会对坏帧重算。
 - **good 仅在全部检查通过时产生**。
 
 ## 3. 问题码与质量码的区别
@@ -114,6 +117,13 @@
 ### `decode_error`
 
 负载长度正确、CRC 正常，但类型/字节序解码失败或浮点非有限。该行不产生读数，进入待重采。
+
+### `calibration_unknown`
+
+仅出现在声明了校准版本表的点位上：所有帧级 CRC/协议检查通过、解码成功，
+但 `replay.ts` 不可解析为 UTC，或未落入最新登记修订的任何生效区间（缺口）。
+读数仍写入台账以保留 `raw_value` 证据，`engineering_value` 为空，进入待重采；
+事后补录覆盖该区间后，重算会生成派生结论而不是改写原读数。
 
 ### `overflow` / `under_range`
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
+from .util import parse_utc_timestamp
 
 
 def make_batch_id(replay_sha256: str, contract_sha256: str) -> str:
@@ -30,11 +31,30 @@ class Store:
 
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
+        self._migrate_readings()
         self.conn.execute(
-            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),
         )
         self.conn.commit()
+
+    def _migrate_readings(self) -> None:
+        """Add schema-v2 calibration columns to pre-existing ledgers."""
+        columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(readings)")
+        }
+        with self.conn:
+            if "calibration_version_id" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE readings ADD COLUMN "
+                    "calibration_version_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "calibration_registered_at" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE readings ADD COLUMN "
+                    "calibration_registered_at TEXT NOT NULL DEFAULT ''"
+                )
 
     def close(self) -> None:
         self.conn.close()
@@ -184,9 +204,11 @@ class Store:
                 self.conn.execute(
                     "INSERT OR IGNORE INTO readings("
                     "batch_id, device_id, point_key, ts, line_no, raw_value, "
-                    "engineering_value, unit, quality_code, enum_label, source) "
+                    "engineering_value, unit, quality_code, enum_label, source, "
+                    "calibration_version_id, calibration_registered_at) "
                     "VALUES(:batch_id,:device_id,:point_key,:ts,:line_no,:raw_value,"
-                    ":engineering_value,:unit,:quality_code,:enum_label,:source)",
+                    ":engineering_value,:unit,:quality_code,:enum_label,:source,"
+                    ":calibration_version_id,:calibration_registered_at)",
                     {"batch_id": batch_id, **reading},
                 )
             self.conn.execute(
@@ -263,3 +285,68 @@ class Store:
                 "UPDATE batches SET status = ?, finished_at = ? WHERE id = ?",
                 (status, finished_at, batch_id),
             )
+
+    def find_latest_batch(self) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM batches ORDER BY started_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        return self._dict(row)
+
+    def batch_readings(self, batch_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM readings WHERE batch_id = ? ORDER BY id",
+            (batch_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_derived_reading(self, batch_id: str, derived: dict[str, Any]) -> bool:
+        """Append one derived conclusion; True when a new row was inserted.
+
+        INSERT OR IGNORE on (batch, device, point, ts, new version) makes a
+        repeated recalculation with the same revision idempotent, while a
+        later revision covering the same interval adds a fresh row and keeps
+        the earlier derived evidence intact.
+        """
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO derived_readings("
+                "batch_id, device_id, point_key, ts, source_reading_id, "
+                "old_calibration_version_id, new_calibration_version_id, "
+                "new_calibration_registered_at, scale, offset, raw_value, "
+                "engineering_value, quality_code, enum_label, input_sha256, created_at) "
+                "VALUES(:batch_id,:device_id,:point_key,:ts,:source_reading_id,"
+                ":old_calibration_version_id,:new_calibration_version_id,"
+                ":new_calibration_registered_at,:scale,:offset,:raw_value,"
+                ":engineering_value,:quality_code,:enum_label,:input_sha256,:created_at)",
+                {"batch_id": batch_id, **derived},
+            )
+        return cursor.rowcount > 0
+
+    def derived_readings(self, batch_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM derived_readings WHERE batch_id = ? ORDER BY id",
+            (batch_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_derived_map(self, batch_id: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """Map (device, point, ts) to the conclusion of the latest-registered
+        revision, breaking ties by insertion order."""
+        latest: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in self.derived_readings(batch_id):
+            key = (row["device_id"], row["point_key"], row["ts"])
+            current = latest.get(key)
+            if current is None:
+                latest[key] = row
+                continue
+            row_moment = parse_utc_timestamp(row["new_calibration_registered_at"])
+            current_moment = parse_utc_timestamp(
+                current["new_calibration_registered_at"]
+            )
+            row_key = (row_moment is not None, row_moment, row["id"])
+            current_key = (
+                current_moment is not None, current_moment, current["id"]
+            )
+            if row_key > current_key:
+                latest[key] = row
+        return latest

@@ -18,7 +18,7 @@ from pointlog.quality import (
 
 
 def test_catalogue_is_complete_and_consistent():
-    assert len(QUALITY_ORDER) == 12
+    assert len(QUALITY_ORDER) == 13
     assert len(set(QUALITY_ORDER)) == len(QUALITY_ORDER)
     for code in QUALITY_ORDER:
         assert is_quality_code(code)
@@ -89,6 +89,7 @@ def test_individual_value_codes():
         ("exception_response", True),
         ("missing_response", True),
         ("decode_error", True),
+        ("calibration_unknown", True),
     ],
 )
 def test_pending_recollect_flags(code, pending):

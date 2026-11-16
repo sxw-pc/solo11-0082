@@ -179,6 +179,7 @@ devices:
 ```bash
 python -m pointlog demo [--contract PATH] [--fixture PATH] [--db PATH] [--reports DIR]
 python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR] [--no-report] [--resume] [--stop-after N]
+python -m pointlog recalibrate --contract PATH [--db PATH] [--batch-id ID] [--reports DIR] [--no-report] [--stop-after N]
 python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
@@ -194,8 +195,27 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `--resume` | 按回放文件指纹与已处理行偏移续采 |
 | `--stop-after` | 调试用，处理 N 行后模拟中断，便于验证续采 |
 | `--no-report` | 仅入库，不写报告 |
+| `--batch-id` | 重算目标批次；缺省为最新批次 |
 
 退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
+
+## 校准版本与重算
+
+点位可在契约中声明可选的 `calibrations` 校准版本表：每个修订有登记时刻，
+每个版本有独立 ID、`scale`/`offset` 和互不重叠的 UTC 生效区间；较晚登记的
+修订替代旧修订的生效区间，旧修订保留为证据。声明了校准表的点位只在
+`replay.ts` 可解析且落入唯一生效区间时产出工程值，缺口记为
+`calibration_unknown`（无法判定，进入待重采），不会用邻近版本猜测。
+
+迟到的校准单通过 `python -m pointlog recalibrate` 生效：它只对声明了校准表
+的点位重算，把结论追加到 `derived_readings`（带来源批次、旧/新校准版本与
+输入摘要），绝不 UPDATE 原始 `readings`；同一补录版本重复重算幂等，后续
+补录覆盖同一区间时保留先前派生版本。坏 CRC/协议帧没有读数，不参与重算。
+
+报告由契约 `report.views` 授权两种业务视图：`as_recorded`（首次采录时已
+登记校准的冻结结论）与 `as_effective`（当前生效期映射的最新派生结论）。
+两个视图各自内部一致（工程值与质量码同源），且不改变原始 CRC、
+`raw_value` 或来源文件摘要。详见 [docs/CONTRACT.md](docs/CONTRACT.md)。
 
 ## SQLite 台账
 
@@ -203,8 +223,9 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | --- | --- | --- |
 | `batches` | 批次元数据与统计 | `id`、回放/契约 sha256、开始/结束时间、状态、行数、有效读数 |
 | `frames` | 每行帧级结果 | 批次、行号、请求/应答帧、CRC 标志、点位、质量码、问题码 |
-| `readings` | 解码后的点位读数 | 设备、点位、时间戳、原始值、工程值、单位、质量码 |
+| `readings` | 解码后的点位读数 | 设备、点位、时间戳、原始值、工程值、单位、质量码、校准版本与登记时刻 |
 | `issues` | 问题明细与待重采标记 | 批次、行号、点位、问题码、帧摘要、说明、`pending_collect` |
+| `derived_readings` | 重算派生结论（只追加） | 来源批次/读数、旧/新校准版本、登记时刻、工程值、质量码、输入摘要 |
 | `resume_state` | 续采状态 | 回放路径 + sha256、批次、已处理行偏移、总行数 |
 | `schema_meta` | schema 版本 | `schema_version` |
 

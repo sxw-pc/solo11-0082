@@ -5,15 +5,19 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .codec import BYTE_ORDERS_16, BYTE_ORDERS_32, DATA_TYPES, REGISTER_COUNTS
+from .util import parse_utc_timestamp
 
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+REPORT_VIEWS = ("as_recorded", "as_effective")
 
 
 class ContractError(ValueError):
@@ -37,6 +41,40 @@ class Device:
 
 
 @dataclass(frozen=True)
+class CalibrationVersion:
+    """One calibration version: coefficients plus non-overlapping UTC intervals.
+
+    Intervals are half-open [start, end); an end of None means open-ended.
+    """
+
+    version_id: str
+    scale: float
+    offset: float
+    intervals: tuple[tuple[datetime, datetime | None], ...]
+
+    def covers(self, moment: datetime) -> bool:
+        return any(
+            start <= moment and (end is None or moment < end)
+            for start, end in self.intervals
+        )
+
+
+@dataclass(frozen=True)
+class CalibrationRevision:
+    """One registered calibration sheet. Later registrations replace the
+    effective-interval mapping of earlier ones; earlier rows remain evidence."""
+
+    registered_at: datetime
+    versions: tuple[CalibrationVersion, ...]
+
+    def version_at(self, moment: datetime) -> CalibrationVersion | None:
+        for version in self.versions:
+            if version.covers(moment):
+                return version
+        return None
+
+
+@dataclass(frozen=True)
 class PointContract:
     device_id: str
     point_key: str
@@ -53,6 +91,7 @@ class PointContract:
     range_max: float
     enum: dict[int, str] = field(default_factory=dict)
     description: str = ""
+    calibrations: tuple[CalibrationRevision, ...] = ()
 
     @property
     def match_key(self) -> tuple[int, int, int, int]:
@@ -63,6 +102,25 @@ class PointContract:
         return self.start + self.count - 1
 
 
+def resolve_calibration(
+    point: PointContract, moment: datetime
+) -> tuple[CalibrationRevision, CalibrationVersion] | None:
+    """Resolve the calibration effective at ``moment``.
+
+    Only the latest registered revision is authoritative: it replaces the
+    effective intervals of older revisions. Returns None when the point has
+    no calibration table or the timestamp falls into a gap (undeterminable);
+    callers must not guess from neighbouring versions.
+    """
+    if not point.calibrations:
+        return None
+    revision = point.calibrations[-1]
+    version = revision.version_at(moment)
+    if version is None:
+        return None
+    return revision, version
+
+
 @dataclass(frozen=True)
 class ContractSet:
     version: int
@@ -70,6 +128,7 @@ class ContractSet:
     points: tuple[PointContract, ...]
     by_match: dict[tuple[int, int, int, int], PointContract]
     by_key: dict[str, PointContract]
+    report_views: tuple[str, ...] = ("as_recorded",)
 
     def find(self, slave_id: int, function: int, start: int, count: int):
         return self.by_match.get((slave_id, function, start, count))
@@ -82,6 +141,9 @@ class ContractSet:
             if device.device_id == device_id:
                 return device.label
         return device_id
+
+    def has_calibrations(self) -> bool:
+        return any(point.calibrations for point in self.points)
 
 
 def _number(value: Any) -> bool:
@@ -117,6 +179,211 @@ def _parse_enum(raw_enum: Any, location: str, data_type: str) -> dict[int, str]:
         )
         result[key] = raw_label
     return result
+
+
+def _to_utc(value: Any) -> datetime | None:
+    """Accept a YAML timestamp (datetime) or an ISO string; require UTC-aware."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return None
+        return value.astimezone(timezone.utc)
+    return parse_utc_timestamp(value)
+
+
+def _parse_intervals(raw: Any, location: str) -> tuple[tuple[datetime, datetime | None], ...]:
+    _require(
+        isinstance(raw, list) and bool(raw),
+        "contract_calibration",
+        "effective must be a non-empty list of [start, end] pairs",
+        location,
+    )
+    intervals: list[tuple[datetime, datetime | None]] = []
+    for item in raw:
+        _require(
+            isinstance(item, (list, tuple)) and len(item) == 2,
+            "contract_calibration",
+            "effective interval must be a [start, end] pair",
+            location,
+        )
+        start = _to_utc(item[0])
+        _require(
+            start is not None,
+            "contract_calibration",
+            f"interval start {item[0]!r} is not an aware UTC timestamp",
+            location,
+        )
+        end: datetime | None = None
+        if item[1] is not None:
+            end = _to_utc(item[1])
+            _require(
+                end is not None,
+                "contract_calibration",
+                f"interval end {item[1]!r} is not an aware UTC timestamp",
+                location,
+            )
+            _require(
+                start < end,
+                "contract_calibration",
+                "interval start must be before interval end",
+                location,
+            )
+        intervals.append((start, end))
+    return tuple(intervals)
+
+
+def _check_no_overlap(
+    entries: list[tuple[str, datetime, datetime | None]], location: str
+) -> None:
+    """Reject overlapping effective intervals inside one revision.
+
+    Intervals are half-open, so touching bounds (end == next start) are fine.
+    Gaps are allowed here; they surface as undeterminable readings at runtime.
+    """
+    ordered = sorted(entries, key=lambda entry: (entry[1], entry[0]))
+    max_end: datetime | None = None
+    max_end_id = ""
+    open_ended_id: str | None = None
+    for version_id, start, end in ordered:
+        if open_ended_id is not None:
+            raise ContractError(
+                "contract_calibration_overlap",
+                f"effective interval of version {version_id!r} overlaps "
+                f"open-ended interval of version {open_ended_id!r}",
+                location,
+            )
+        if max_end is not None and start < max_end:
+            raise ContractError(
+                "contract_calibration_overlap",
+                f"effective interval of version {version_id!r} overlaps "
+                f"version {max_end_id!r}",
+                location,
+            )
+        if end is None:
+            open_ended_id = version_id
+        elif max_end is None or end > max_end:
+            max_end = end
+            max_end_id = version_id
+
+
+def _parse_calibrations(raw: Any, location: str) -> tuple[CalibrationRevision, ...]:
+    if raw is None:
+        return ()
+    _require(
+        isinstance(raw, list) and bool(raw),
+        "contract_calibration",
+        "calibrations must be a non-empty list of revisions",
+        location,
+    )
+    revisions: list[CalibrationRevision] = []
+    seen_registered: set[datetime] = set()
+    seen_version_ids: set[str] = set()
+    for index, raw_revision in enumerate(raw, start=1):
+        rev_location = f"{location}.calibrations[{index}]"
+        _require(
+            isinstance(raw_revision, dict),
+            "contract_calibration",
+            "calibration revision must be a mapping",
+            rev_location,
+        )
+        registered = _to_utc(raw_revision.get("registered_at"))
+        _require(
+            registered is not None,
+            "contract_calibration",
+            "registered_at must be an aware UTC ISO 8601 timestamp",
+            rev_location,
+        )
+        _require(
+            registered not in seen_registered,
+            "contract_calibration",
+            "two revisions of one point share the same registered_at",
+            rev_location,
+        )
+        seen_registered.add(registered)
+        raw_versions = raw_revision.get("versions")
+        _require(
+            isinstance(raw_versions, list) and bool(raw_versions),
+            "contract_calibration",
+            "versions must be a non-empty list",
+            rev_location,
+        )
+        versions: list[CalibrationVersion] = []
+        interval_entries: list[tuple[str, datetime, datetime | None]] = []
+        for version_index, raw_version in enumerate(raw_versions, start=1):
+            version_location = f"{rev_location}.versions[{version_index}]"
+            _require(
+                isinstance(raw_version, dict),
+                "contract_calibration",
+                "calibration version must be a mapping",
+                version_location,
+            )
+            version_id = raw_version.get("version_id")
+            _require(
+                isinstance(version_id, str) and bool(KEY_RE.match(version_id)),
+                "contract_calibration",
+                "version_id must match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}",
+                version_location,
+            )
+            _require(
+                version_id not in seen_version_ids,
+                "contract_calibration",
+                f"duplicate calibration version id {version_id}",
+                version_location,
+            )
+            seen_version_ids.add(version_id)
+            scale = raw_version.get("scale", 1)
+            _require(
+                _number(scale) and float(scale) != 0.0,
+                "contract_scale",
+                "calibration scale must be finite and non-zero",
+                version_location,
+            )
+            offset = raw_version.get("offset", 0)
+            _require(
+                _number(offset),
+                "contract_offset",
+                "calibration offset must be finite",
+                version_location,
+            )
+            intervals = _parse_intervals(raw_version.get("effective"), version_location)
+            for start, end in intervals:
+                interval_entries.append((version_id, start, end))
+            versions.append(
+                CalibrationVersion(version_id, float(scale), float(offset), intervals)
+            )
+        _check_no_overlap(interval_entries, rev_location)
+        revisions.append(CalibrationRevision(registered, tuple(versions)))
+    revisions.sort(key=lambda revision: revision.registered_at)
+    return tuple(revisions)
+
+
+def _parse_report_views(raw: Any, has_calibrations: bool, source: str) -> tuple[str, ...]:
+    if raw is None:
+        return ("as_recorded", "as_effective") if has_calibrations else ("as_recorded",)
+    location = f"{source}:report"
+    _require(isinstance(raw, dict), "contract_report", "report must be a mapping", location)
+    views = raw.get("views")
+    _require(
+        isinstance(views, list) and bool(views),
+        "contract_report",
+        "report.views must be a non-empty list",
+        location,
+    )
+    result: list[str] = []
+    for view in views:
+        _require(
+            view in REPORT_VIEWS,
+            "contract_report",
+            f"unknown report view {view!r}; expected one of {', '.join(REPORT_VIEWS)}",
+            location,
+        )
+        _require(
+            view not in result,
+            "contract_report",
+            f"duplicate report view {view!r}",
+            location,
+        )
+        result.append(view)
+    return tuple(result)
 
 
 def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
@@ -168,6 +435,7 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
     _require(isinstance(description, str), "contract_point",
              "description must be a string", location)
     enum = _parse_enum(raw.get("enum"), location, data_type)
+    calibrations = _parse_calibrations(raw.get("calibrations"), location)
     return PointContract(
         device_id=device_id,
         point_key=key,
@@ -184,6 +452,7 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
         range_max=range_max,
         enum=enum,
         description=description,
+        calibrations=calibrations,
     )
 
 
@@ -230,12 +499,16 @@ def parse_contract(text: str, source: str = "<memory>") -> ContractSet:
             seen_keys.add(point.point_key)
             seen_matches.add(point.match_key)
             points.append(point)
+    report_views = _parse_report_views(
+        root.get("report"), any(point.calibrations for point in points), source
+    )
     return ContractSet(
         version=version,
         devices=tuple(devices),
         points=tuple(points),
         by_match={point.match_key: point for point in points},
         by_key={point.point_key: point for point in points},
+        report_views=report_views,
     )
 
 

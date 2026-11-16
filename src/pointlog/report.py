@@ -32,6 +32,67 @@ def _yes(value: bool) -> str:
     return "是" if value else "否"
 
 
+def _value_or_dash(value: Any) -> Any:
+    return "-" if value is None or value == "" else value
+
+
+_VIEW_TITLES = {
+    "as_recorded": "as-recorded（首次采录时已登记校准）",
+    "as_effective": "as-effective（当前生效期映射的最新派生结论）",
+}
+
+
+def _render_calibration_views(views: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for view_name in views["authorized_views"]:
+        view = views.get(view_name)
+        if view is None:
+            continue
+        totals = view["totals"]
+        lines += [
+            "",
+            f"## 校准视图 · {_VIEW_TITLES.get(view_name, view_name)}",
+            "",
+            _table(["指标", "数量"], [
+                ["读数记录", totals["readings"]],
+                ["有效读数（good）", totals["valid_readings"]],
+                ["越界读数", totals["out_of_range"]],
+                ["校准无法判定", totals["calibration_unknown"]],
+                ["待重采点位", totals["pending_points"]],
+                ["派生结论", totals["derived_readings"]],
+            ]),
+            "",
+        ]
+        rows = []
+        for item in view["readings"]:
+            basis = "原采录"
+            if item["basis"] == "derived":
+                derivation = item["derivation"]
+                old = derivation["old_calibration_version_id"] or "-"
+                new = derivation["new_calibration_version_id"] or "-"
+                basis = f"派生 {old}→{new}"
+            rows.append([
+                item["device_id"],
+                item["point_key"],
+                item["ts"],
+                item["raw_value"],
+                _value_or_dash(item["engineering_value"]),
+                item["quality_code"],
+                _value_or_dash(item["calibration_version_id"]),
+                _value_or_dash(item["calibration_registered_at"]),
+                basis,
+            ])
+        if rows:
+            lines.append(_table(
+                ["设备", "点位", "时间", "原始值", "工程值", "质量码",
+                 "校准版本", "登记时刻", "依据"],
+                rows,
+            ))
+        else:
+            lines.append("无校准点位读数。")
+    return lines
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -108,6 +169,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ))
     else:
         lines.append("无待重采点位。")
+    if "calibration_views" in summary:
+        lines += _render_calibration_views(summary["calibration_views"])
     lines.append("")
     return "\n".join(lines)
 

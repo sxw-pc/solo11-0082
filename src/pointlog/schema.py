@@ -1,6 +1,6 @@
 """SQLite schema for the capture ledger."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -55,11 +55,13 @@ CREATE TABLE IF NOT EXISTS readings (
     ts TEXT NOT NULL,
     line_no INTEGER NOT NULL,
     raw_value REAL NOT NULL,
-    engineering_value REAL NOT NULL,
+    engineering_value REAL,
     unit TEXT NOT NULL DEFAULT '',
     quality_code TEXT NOT NULL,
     enum_label TEXT,
     source TEXT NOT NULL DEFAULT '',
+    calibration_version_id TEXT NOT NULL DEFAULT '',
+    calibration_registered_at TEXT NOT NULL DEFAULT '',
     UNIQUE (batch_id, device_id, point_key, ts),
     FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
 );
@@ -92,6 +94,31 @@ CREATE TABLE IF NOT EXISTS resume_state (
     FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
 );
 
+-- Append-only audit trail of recalculated conclusions. Rows are never
+-- updated or deleted: a later registered revision inserts new rows keyed by
+-- its version id while earlier derived rows remain as evidence.
+CREATE TABLE IF NOT EXISTS derived_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    point_key TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    source_reading_id INTEGER NOT NULL,
+    old_calibration_version_id TEXT NOT NULL DEFAULT '',
+    new_calibration_version_id TEXT NOT NULL DEFAULT '',
+    new_calibration_registered_at TEXT NOT NULL DEFAULT '',
+    scale REAL,
+    offset REAL,
+    raw_value REAL NOT NULL,
+    engineering_value REAL,
+    quality_code TEXT NOT NULL,
+    enum_label TEXT,
+    input_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (batch_id, device_id, point_key, ts, new_calibration_version_id),
+    FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_frames_batch_quality
     ON frames(batch_id, quality_code);
 CREATE INDEX IF NOT EXISTS idx_readings_batch_point
@@ -102,4 +129,6 @@ CREATE INDEX IF NOT EXISTS idx_batches_fingerprint
     ON batches(replay_sha256, contract_sha256);
 CREATE INDEX IF NOT EXISTS idx_resume_path
     ON resume_state(replay_path, updated_at);
+CREATE INDEX IF NOT EXISTS idx_derived_batch_point
+    ON derived_readings(batch_id, device_id, point_key);
 """

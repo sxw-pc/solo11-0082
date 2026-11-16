@@ -73,6 +73,65 @@ def _severity(value: str) -> str:
     return f'<span class="{css}">{_e(value)}</span>'
 
 
+_VIEW_TITLES = {
+    "as_recorded": "as-recorded（首次采录时已登记校准）",
+    "as_effective": "as-effective（当前生效期映射的最新派生结论）",
+}
+
+
+def _dash(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    return str(value)
+
+
+def _render_calibration_views(views: dict[str, Any]) -> str:
+    sections = []
+    for view_name in views["authorized_views"]:
+        view = views.get(view_name)
+        if view is None:
+            continue
+        totals = view["totals"]
+        metric_rows = [
+            ["读数记录", totals["readings"]],
+            ["有效读数（good）", totals["valid_readings"]],
+            ["越界读数", totals["out_of_range"]],
+            ["校准无法判定", totals["calibration_unknown"]],
+            ["待重采点位", totals["pending_points"]],
+            ["派生结论", totals["derived_readings"]],
+        ]
+        reading_rows = []
+        for item in view["readings"]:
+            basis = "原采录"
+            if item["basis"] == "derived":
+                derivation = item["derivation"]
+                old = derivation["old_calibration_version_id"] or "-"
+                new = derivation["new_calibration_version_id"] or "-"
+                basis = f"派生 {old}→{new}"
+            reading_rows.append([
+                f"<code>{_e(item['device_id'])}</code>",
+                f"<code>{_e(item['point_key'])}</code>",
+                _e(item["ts"]),
+                _e(item["raw_value"]),
+                _e(_dash(item["engineering_value"])),
+                f"<code>{_e(item['quality_code'])}</code>",
+                _e(_dash(item["calibration_version_id"])),
+                _e(_dash(item["calibration_registered_at"])),
+                _e(basis),
+            ])
+        sections.append(
+            f"<section><h2>校准视图 · {_e(_VIEW_TITLES.get(view_name, view_name))}</h2>"
+            + _table(["指标", "数量"], [[_e(k), _e(v)] for k, v in metric_rows])
+            + _table(
+                ["设备", "点位", "时间", "原始值", "工程值", "质量码",
+                 "校准版本", "登记时刻", "依据"],
+                reading_rows,
+            )
+            + "</section>"
+        )
+    return "".join(sections)
+
+
 def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -118,6 +177,11 @@ def render_html(summary: dict[str, Any]) -> str:
         if pending_rows
         else '<p class="note">本次采集没有待重采点位。</p>'
     )
+    calibration_section = ""
+    if "calibration_views" in summary:
+        calibration_section = (
+            _render_calibration_views(summary["calibration_views"]) + "\n\n"
+        )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -184,7 +248,7 @@ def render_html(summary: dict[str, Any]) -> str:
 {_table(['设备', '点位', '问题码', '质量码', '次数', '行号', '说明'], pending_rows)}
 </section>
 
-<footer>
+{calibration_section}<footer>
 本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。
 所有帧、设备名、点位与时间戳均为合成 fixture。
 </footer>

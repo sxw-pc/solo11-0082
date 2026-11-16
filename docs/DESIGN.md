@@ -21,8 +21,9 @@
 | `contract.py` | YAML 契约 schema 与静态校验 | 帧解析 |
 | `codec.py` | 寄存器字节序、类型、缩放、枚举 | 数据库、质量优先级 |
 | `quality.py` | 质量码目录、优先级、待重采属性 | I/O |
-| `lineproc.py` | 单行帧级到读数级处理 | 批次生命周期 |
+| `lineproc.py` | 单行帧级到读数级处理（含校准版本解析） | 批次生命周期 |
 | `pipeline.py` | 批次、续采、提交、完成/失败状态 | HTTP、报告排版 |
+| `recalibrate.py` | 迟到校准单的幂等重算，只追加派生结论 | 改写原始 readings |
 | `store.py` | SQLite schema、事务写入、续采状态 | 聚合展示 |
 | `store_queries.py` | 报告/复核台只读聚合 | 写操作 |
 | `report*.py` | JSON/Markdown/HTML/CSV 渲染 | 采集 |
