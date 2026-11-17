@@ -8,3 +8,8 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+venv/
+node_modules/
+*.pyc
+.benchmarks/
+.env
