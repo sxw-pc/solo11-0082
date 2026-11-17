@@ -143,6 +143,37 @@ def parse_response(frame: bytes) -> ResponseFrame:
     )
 
 
+def match_response(
+    request: RequestFrame, response: ResponseFrame, expected_data_bytes: int
+) -> None:
+    """Raise FrameParseError unless *response* matches *request* and the contract.
+
+    Mirrors the structural response checks of the capture pipeline: slave
+    address, function code (including the exception flag) and declared data
+    byte count must agree with the request and the contracted register count.
+    """
+    if response.slave_id != request.slave_id:
+        raise FrameParseError(
+            "slave_mismatch",
+            f"response slave {response.slave_id} != request slave {request.slave_id}",
+        )
+    expected_function = (
+        request.function | 0x80 if response.is_exception else request.function
+    )
+    if response.function != expected_function:
+        raise FrameParseError(
+            "function_mismatch",
+            f"response function 0x{response.function:02X} != "
+            f"expected 0x{expected_function:02X}",
+        )
+    if not response.is_exception and response.byte_count != expected_data_bytes:
+        raise FrameParseError(
+            "byte_count_mismatch",
+            f"response byte count {response.byte_count} != expected "
+            f"{expected_data_bytes}",
+        )
+
+
 def build_request(slave_id: int, function: int, start: int, count: int) -> bytes:
     if function not in SUPPORTED_FUNCTIONS:
         raise ValueError("only functions 0x03 and 0x04 are supported")

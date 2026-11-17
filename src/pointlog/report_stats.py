@@ -22,7 +22,10 @@ class ReportError(RuntimeError):
 
 
 def collect_summary(
-    store: Store, batch_id: str, contract: ContractSet
+    store: Store,
+    batch_id: str,
+    contract: ContractSet,
+    crc_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     batch = store.get_batch(batch_id)
     if batch is None:
@@ -31,7 +34,7 @@ def collect_summary(
     pending = pending_recollect(store, batch_id)
     quality = quality_distribution(store, batch_id)
     issues = issue_distribution(store, batch_id)
-    return {
+    summary = {
         "schema_version": 1,
         "batch": {
             "id": batch["id"],
@@ -58,3 +61,9 @@ def collect_summary(
         "points": point_stats(store, batch_id, contract),
         "pending_recollect": pending,
     }
+    if crc_audit is not None:
+        # Hypothetical fault-space audit of selected good responses. It is
+        # reported alongside the batch facts but never folded into totals,
+        # the quality distribution or the pending-recollect list.
+        summary["crc_audit"] = crc_audit
+    return summary

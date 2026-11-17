@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import struct
+from dataclasses import dataclass
 
 DATA_TYPES = ("int16", "uint16", "int32", "uint32", "float32")
 BYTE_ORDERS_16 = ("AB", "BA")
@@ -116,3 +117,38 @@ def enum_label(mapping: dict[int, str], raw: int | float) -> tuple[bool, str | N
         return False, None
     key = int(raw)
     return key in mapping, mapping.get(key)
+
+
+@dataclass(frozen=True)
+class ValueCheck:
+    """Decoded value plus the outcome of the range/enum quality checks."""
+
+    raw: int | float
+    engineering: float
+    range_code: str | None
+    in_enum: bool
+    label: str | None
+
+
+def check_value(
+    data: bytes,
+    data_type: str,
+    byte_order: str,
+    scale: float,
+    offset: float,
+    range_min: float,
+    range_max: float,
+    enum: dict[int, str],
+) -> ValueCheck:
+    """Decode *data* and evaluate the range/enum quality checks in one call."""
+    raw = decode_value(data, data_type, byte_order)
+    engineering = apply_engineering(raw, scale, offset)
+    range_code = classify_range(engineering, range_min, range_max)
+    in_enum, label = enum_label(enum, raw)
+    return ValueCheck(
+        raw=raw,
+        engineering=engineering,
+        range_code=range_code,
+        in_enum=in_enum,
+        label=label,
+    )
