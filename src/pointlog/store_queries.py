@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contract import ContractSet
+from .mode_state import ModeReviewError, mode_state_review
 from .quality import QUALITY_ORDER, severity
 from .store import Store
 
@@ -213,3 +214,24 @@ def batch_totals(store: Store, batch_id: str) -> dict[str, int]:
         "issues": int(issue_count),
         "pending_points": pending_point_count(store, batch_id),
     }
+
+
+def mode_state_rows(
+    store: Store, batch_id: str, contract: ContractSet
+) -> list[dict[str, Any]]:
+    """Return the temporal mode-state review, or an empty list for old batches.
+
+    A completed batch always yields one entry per enum point declaring
+    ``mode_state``. Batches frozen before this feature existed have no mode
+    points, so they keep producing byte-identical reports.
+    """
+    batch = store.get_batch(batch_id)
+    if batch is None:
+        raise ModeReviewError("batch_missing", f"batch {batch_id} does not exist")
+    if batch["status"] != "completed":
+        raise ModeReviewError(
+            "batch_not_completed",
+            f"batch {batch_id} is {batch['status']}; mode-state review requires "
+            "a completed batch",
+        )
+    return mode_state_review(store, batch_id, contract)

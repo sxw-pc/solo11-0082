@@ -32,6 +32,31 @@ QUALITY_ORDER = (
     NOT_IN_ENUM,
 )
 
+# Evidence grades for temporal mode-state conclusions. These are deliberately
+# separate from the frame quality catalogue: a reading keeps its original
+# quality code, while a *pair* of confirmed observations receives one of these
+# conclusions in the review report.
+EVIDENCE_DIRECT = "direct"
+EVIDENCE_IMPOSSIBLE = "impossible"
+EVIDENCE_UNPROVEN = "unproven"
+
+EVIDENCE_ORDER = (EVIDENCE_DIRECT, EVIDENCE_UNPROVEN, EVIDENCE_IMPOSSIBLE)
+
+EVIDENCE_META: dict[str, dict[str, object]] = {
+    EVIDENCE_DIRECT: {
+        "severity": "info",
+        "description": "adjacent observations form a directly declared legal transition",
+    },
+    EVIDENCE_UNPROVEN: {
+        "severity": "warning",
+        "description": "no contradiction, but the observed states do not prove the intervening sequence",
+    },
+    EVIDENCE_IMPOSSIBLE: {
+        "severity": "error",
+        "description": "no path in the state graph can satisfy the elapsed time",
+    },
+}
+
 QUALITY_META: dict[str, dict[str, object]] = {
     GOOD: {
         "severity": "info",
@@ -160,4 +185,19 @@ def quality_meta(code: str) -> dict[str, object]:
         "severity": "error",
         "pending_recollect": True,
         "description": "unknown quality code",
+    }))
+
+
+def is_evidence_grade(grade: str) -> bool:
+    return grade in EVIDENCE_META
+
+
+def evidence_severity(grade: str) -> str:
+    return str(EVIDENCE_META.get(grade, {"severity": "error"})["severity"])
+
+
+def evidence_meta(grade: str) -> dict[str, object]:
+    return dict(EVIDENCE_META.get(grade, {
+        "severity": "error",
+        "description": "unknown evidence grade",
     }))

@@ -15,6 +15,7 @@ def test_json_summary_has_stable_shape(demo_run):
         "devices",
         "points",
         "pending_recollect",
+        "mode_state_review",
     ]
     assert list(summary["batch"]) == [
         "id", "status", "started_at", "finished_at", "total_lines",

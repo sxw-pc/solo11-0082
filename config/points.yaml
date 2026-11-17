@@ -42,6 +42,16 @@ devices:
           0: idle
           1: run
           2: fault
+        mode_state:
+          verification: hop
+          max_gap_seconds: 900
+          min_dwell_seconds:
+            1: 120
+          reset_state: 2
+          transitions:
+            0: [1, 2]
+            1: [0, 2]
+            2: [0]
         description: Synthetic operating mode.
       - key: line_a_flow
         slave_id: 1

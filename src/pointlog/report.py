@@ -32,6 +32,102 @@ def _yes(value: bool) -> str:
     return "是" if value else "否"
 
 
+def _mode_segment_rows(review: dict[str, Any]) -> list[list[Any]]:
+    rows = []
+    for segment in review["segments"]:
+        if segment["kind"] == "confirmed":
+            rows.append([
+                "确证", segment["start_ts"], segment["end_ts"],
+                f"{segment['state']['raw_value']} / {segment['state']['label'] or '-'}",
+                f"{segment['start_line']}–{segment['end_line']}",
+                "-", segment["evidence_grade"], segment["detail"],
+            ])
+        else:
+            rows.append([
+                "未知", segment["start_ts"], segment["end_ts"], "-",
+                ",".join(str(number) for number in segment["line_numbers"]) or "-",
+                ",".join(segment["reasons"]), segment["evidence_grade"],
+                segment["detail"],
+            ])
+    return rows
+
+
+def _mode_pair_rows(review: dict[str, Any]) -> list[list[Any]]:
+    rows = []
+    for pair in review["transitions"]:
+        path = pair["assumed_path"]
+        path_text = (
+            "→".join(str(state) for state in path) if path else "-"
+        )
+        windows = "; ".join(
+            f"{window['state']}@{window['earliest_ts']}~{window['latest_ts']}"
+            for window in pair["plausible_windows"]
+        ) or "-"
+        rows.append([
+            pair["from_ts"], pair["to_ts"],
+            f"{pair['from_state']['raw_value']}→{pair['to_state']['raw_value']}",
+            f"L{pair['from_line']}→L{pair['to_line']}",
+            pair["elapsed_seconds"],
+            pair["min_required_seconds"] if pair["min_required_seconds"] is not None else "-",
+            path_text, windows, _yes(pair["via_reset"]),
+            pair["grade"], pair["verdict"], pair["recommendation"] or "-",
+        ])
+    return rows
+
+
+def render_mode_state_markdown(summary: dict[str, Any]) -> list[str]:
+    reviews = summary.get("mode_state_review") or []
+    if not reviews:
+        return []
+    lines = ["", "## 枚举状态时序复核", ""]
+    lines.append(
+        "状态结论仅引用 CRC、解码、量程、枚举全部合格且时间戳可解析的已完成批次读数；"
+        "原始 reading 与 issue 不做任何修改。"
+    )
+    for review in reviews:
+        lines.append("")
+        lines.append(
+            f"### {review['device_id']} / {review['point_key']} "
+            f"（核验语义: {review['verification']}，最大未知间隔: "
+            f"{review['max_gap_seconds']}s）"
+        )
+        craw = review["summary"]
+        lines.append("")
+        lines.append(_table(["直接合法", "未证成", "明确不可能", "未知段", "确证段"], [[
+            craw["direct"], craw["unproven"], craw["impossible"],
+            craw["unknown_segments"], craw["confirmed_segments"],
+        ]]))
+        reset = review["reset_state"]
+        lines.append("")
+        lines.append(
+            "复位状态: "
+            + (f"{reset['raw_value']} / {reset['label'] or '-'}" if reset else "未声明")
+            + ("；输入行时间顺序与时间戳不一致（已按时间戳排序）。"
+               if review["out_of_order_input"] else "")
+        )
+        lines += ["", "#### 逐段证据", ""]
+        segment_rows = _mode_segment_rows(review)
+        if segment_rows:
+            lines.append(_table(
+                ["段类型", "起始", "结束", "状态", "行号", "原因", "证据等级", "说明"],
+                segment_rows,
+            ))
+        else:
+            lines.append("没有可复核的时间段。")
+        lines += ["", "#### 相邻确证观测的证据结论", ""]
+        pair_rows = _mode_pair_rows(review)
+        if pair_rows:
+            lines.append(_table(
+                ["起", "止", "状态跳转", "行号", "间隔(s)", "最短需求(s)",
+                 "最短假设路径", "中间状态可行窗口", "经复位", "证据等级", "结论", "建议"],
+                pair_rows,
+            ))
+        else:
+            lines.append("确证观测不足一对，无法产生跳转结论。")
+    lines.append("")
+    return lines
+
+
 def render_markdown(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -108,6 +204,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ))
     else:
         lines.append("无待重采点位。")
+    lines += render_mode_state_markdown(summary)
     lines.append("")
     return "\n".join(lines)
 

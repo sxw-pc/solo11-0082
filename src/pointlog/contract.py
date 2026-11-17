@@ -31,6 +31,46 @@ class ContractError(ValueError):
 
 
 @dataclass(frozen=True)
+class ModeStateContract:
+    """Declared temporal semantics for one enum-mode point.
+
+    ``transitions`` maps a source raw enum value to the set of raw enum values
+    it may legally transition to. ``min_dwell_seconds`` gives the minimum time
+    a value must remain current before it may be left again. ``max_gap_seconds``
+    is the largest unobserved interval that may still be bridged by assuming an
+    intermediate state; ``reset_state`` is the only value that may be entered
+    through an explicitly declared edge without observing a predecessor.
+    ``terminal_states`` explicitly marks states that are allowed to have no
+    outgoing edge.
+    """
+
+    point_key: str
+    transitions: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    min_dwell_seconds: dict[int, int] = field(default_factory=dict)
+    max_gap_seconds: int = 0
+    reset_state: int | None = None
+    verification: str = "hop"
+    terminal_states: tuple[int, ...] = ()
+
+    @property
+    def states(self) -> tuple[int, ...]:
+        return tuple(sorted(set(self.transitions) | {
+            target for targets in self.transitions.values() for target in targets
+        } | set(self.min_dwell_seconds) | set(self.terminal_states) | (
+            {self.reset_state} if self.reset_state is not None else set()
+        )))
+
+    def dwell(self, state: int) -> int:
+        return int(self.min_dwell_seconds.get(state, 0))
+
+    def targets(self, state: int) -> tuple[int, ...]:
+        return self.transitions.get(state, ())
+
+    def has_edge(self, source: int, target: int) -> bool:
+        return target in self.transitions.get(source, ())
+
+
+@dataclass(frozen=True)
 class Device:
     device_id: str
     label: str
@@ -53,6 +93,7 @@ class PointContract:
     range_max: float
     enum: dict[int, str] = field(default_factory=dict)
     description: str = ""
+    mode_state: ModeStateContract | None = None
 
     @property
     def match_key(self) -> tuple[int, int, int, int]:
@@ -119,6 +160,213 @@ def _parse_enum(raw_enum: Any, location: str, data_type: str) -> dict[int, str]:
     return result
 
 
+def _parse_mode_state(
+    raw: Any, location: str, enum: dict[int, str]
+) -> ModeStateContract | None:
+    """Validate a ``mode_state`` declaration before any batch is written.
+
+    The graph references raw enum values only. Every referenced value must
+    exist in the point's enum mapping, every non-terminal state must have at
+    least one outgoing edge, and dwell requirements must be non-negative,
+    free of unreachable entries and satisfiable along at least one declared
+    edge into the state.
+    """
+    if raw is None:
+        return None
+    _require(isinstance(raw, dict), "contract_mode", "mode_state must be a mapping", location)
+    _require(bool(enum), "contract_mode",
+             "mode_state requires a non-empty enum mapping on the same point", location)
+
+    def state_value(value: Any, what: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ContractError(
+                "contract_mode", f"{what} must be an integer enum value", location
+            )
+        _require(value in enum, "contract_mode_enum",
+                 f"{what} {value} is not declared in the point enum", location)
+        return value
+
+    verification = raw.get("verification", "hop")
+    _require(verification in ("hop", "bounded"), "contract_mode",
+             "verification must be 'hop' or 'bounded'", location)
+
+    raw_graph = raw.get("transitions")
+    _require(isinstance(raw_graph, dict) and bool(raw_graph), "contract_mode",
+             "transitions must be a non-empty mapping", location)
+    transitions: dict[int, tuple[int, ...]] = {}
+    for raw_source, raw_targets in raw_graph.items():
+        source = state_value(raw_source, "transition source")
+        _require(source not in transitions, "contract_mode",
+                 f"duplicate transition source {source}", location)
+        _require(isinstance(raw_targets, list) and bool(raw_targets), "contract_mode",
+                 f"transitions from {source} must be a non-empty list", location)
+        targets: list[int] = []
+        for raw_target in raw_targets:
+            target = state_value(raw_target, "transition target")
+            _require(target not in targets, "contract_mode",
+                     f"duplicate transition {source}->{target}", location)
+            targets.append(target)
+        transitions[source] = tuple(targets)
+
+    max_gap = raw.get("max_gap_seconds", 0)
+    _require(isinstance(max_gap, int) and not isinstance(max_gap, bool) and max_gap >= 0,
+             "contract_mode_gap", "max_gap_seconds must be a non-negative integer",
+             location)
+    reset_state = raw.get("reset_state")
+    if reset_state is not None:
+        reset_state = state_value(reset_state, "reset_state")
+    raw_terminal = raw.get("terminal_states", [])
+    _require(isinstance(raw_terminal, list), "contract_mode",
+             "terminal_states must be a list", location)
+    terminal: list[int] = []
+    for raw_state in raw_terminal:
+        state = state_value(raw_state, "terminal state")
+        _require(state not in terminal, "contract_mode",
+                 f"duplicate terminal state {state}", location)
+        terminal.append(state)
+
+    raw_dwell = raw.get("min_dwell_seconds", {})
+    _require(isinstance(raw_dwell, dict), "contract_mode_dwell",
+             "min_dwell_seconds must be a mapping", location)
+    dwell: dict[int, int] = {}
+    for raw_state, seconds in raw_dwell.items():
+        state = state_value(raw_state, "dwell state")
+        _require(isinstance(seconds, int) and not isinstance(seconds, bool) and seconds >= 0,
+                 "contract_mode_dwell",
+                 f"min_dwell_seconds for {state} must be a non-negative integer",
+                 location)
+        _require(state not in terminal, "contract_mode_dwell",
+                 f"min_dwell_seconds names terminal state {state} that cannot be left",
+                 location)
+        dwell[state] = seconds
+
+    mode = ModeStateContract(
+        point_key="",
+        transitions=transitions,
+        min_dwell_seconds=dwell,
+        max_gap_seconds=int(max_gap),
+        reset_state=reset_state,
+        verification=str(verification),
+        terminal_states=tuple(terminal),
+    )
+    _validate_graph_semantics(mode, location)
+    return mode
+
+
+def _validate_graph_semantics(mode: ModeStateContract, location: str) -> None:
+    check = GraphValidation(mode)
+    errors = check.errors()
+    if errors:
+        code, detail = errors[0]
+        raise ContractError(code, detail, location)
+
+
+def check_mode_graph(
+    transitions: dict[int, tuple[int, ...]],
+    min_dwell_seconds: dict[int, int] | None = None,
+    max_gap_seconds: int = 0,
+    reset_state: int | None = None,
+    verification: str = "hop",
+    terminal_states: tuple[int, ...] = (),
+) -> list[tuple[str, str]]:
+    """Return every static problem in a mode graph as ``(code, detail)``."""
+    mode = ModeStateContract(
+        point_key="",
+        transitions=dict(transitions),
+        min_dwell_seconds=dict(min_dwell_seconds or {}),
+        max_gap_seconds=int(max_gap_seconds),
+        reset_state=reset_state,
+        verification=verification,
+        terminal_states=tuple(terminal_states),
+    )
+    return GraphValidation(mode).errors()
+
+
+class GraphValidation:
+    """Pure graph checks shared by contract parsing and direct API users."""
+
+    def __init__(self, mode: ModeStateContract):
+        self.mode = mode
+
+    def errors(self) -> list[tuple[str, str]]:
+        mode = self.mode
+        errors: list[tuple[str, str]] = []
+        sources = set(mode.transitions)
+        targets = {target for targets in mode.transitions.values() for target in targets}
+        terminal = set(mode.terminal_states)
+        if not mode.transitions:
+            return [("contract_mode", "transitions must be a non-empty mapping")]
+        for source, targets_ in mode.transitions.items():
+            if not targets_:
+                errors.append(("contract_mode",
+                               f"state {source} is non-terminal but has no legal exit"))
+        for target in sorted(targets - sources - terminal):
+            errors.append(("contract_mode_dead_end",
+                           f"state {target} is reachable but has no outgoing transition "
+                           "and is not declared terminal"))
+        for state in sorted(terminal):
+            if state in sources:
+                errors.append(("contract_mode",
+                               f"terminal state {state} also declares outgoing transitions"))
+        for state in sorted(mode.min_dwell_seconds):
+            if state not in sources:
+                errors.append(("contract_mode_dwell",
+                               f"min_dwell_seconds names unreachable state {state} "
+                               "with no exits"))
+        # A state with a positive dwell must itself be entered. If no declared
+        # edge enters it, the requirement can never be satisfied.
+        for state, seconds in sorted(mode.min_dwell_seconds.items()):
+            if seconds > 0 and state not in targets and state != mode.reset_state:
+                errors.append(("contract_mode_dwell",
+                               f"min_dwell_seconds for {state} cannot be satisfied: "
+                               "no transition enters it and it is not the reset state"))
+        reset = mode.reset_state
+        if reset is not None:
+            if reset not in sources:
+                errors.append(("contract_mode_reset",
+                               f"reset_state {reset} has no declared outgoing transition"))
+            if reset not in targets:
+                errors.append(("contract_mode_reset",
+                               f"reset_state {reset} is not reachable through any "
+                               "declared edge; arbitrary jumps cannot be called a reset"))
+        if mode.verification not in ("hop", "bounded"):
+            errors.append(("contract_mode",
+                           "verification must be 'hop' or 'bounded'"))
+        if mode.max_gap_seconds < 0:
+            errors.append(("contract_mode_gap",
+                           "max_gap_seconds must be a non-negative integer"))
+        # Global satisfiability: every positive-dwell state must lie on a legal
+        # cycle, otherwise the dwell requirement cannot be met by any observed
+        # sequence that leaves and re-enters it.
+        if any(seconds > 0 for seconds in mode.min_dwell_seconds.values()):
+            stuck = self._states_off_cycle()
+            if stuck:
+                errors.append(("contract_mode_dwell",
+                               "min_dwell_seconds is unsatisfiable: no legal cycle "
+                               f"returns to state(s) {sorted(stuck)}"))
+        return errors
+
+    def _states_off_cycle(self) -> set[int]:
+        dwelled = {state for state, seconds in self.mode.min_dwell_seconds.items()
+                   if seconds > 0}
+        if not dwelled:
+            return set()
+        adjacency = {state: set(targets) for state, targets in self.mode.transitions.items()}
+        stuck: set[int] = set()
+        for state in dwelled:
+            reachable: set[int] = set()
+            frontier = list(adjacency.get(state, ()))
+            while frontier:
+                current = frontier.pop()
+                if current in reachable:
+                    continue
+                reachable.add(current)
+                frontier.extend(adjacency.get(current, ()))
+            if state not in reachable:
+                stuck.add(state)
+        return stuck
+
+
 def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
     _require(isinstance(raw, dict), "contract_point", "point must be a mapping", location)
     key = raw.get("key")
@@ -168,6 +416,17 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
     _require(isinstance(description, str), "contract_point",
              "description must be a string", location)
     enum = _parse_enum(raw.get("enum"), location, data_type)
+    mode_state = _parse_mode_state(raw.get("mode_state"), location, enum)
+    if mode_state is not None:
+        mode_state = ModeStateContract(
+            point_key=key,
+            transitions=mode_state.transitions,
+            min_dwell_seconds=mode_state.min_dwell_seconds,
+            max_gap_seconds=mode_state.max_gap_seconds,
+            reset_state=mode_state.reset_state,
+            verification=mode_state.verification,
+            terminal_states=mode_state.terminal_states,
+        )
     return PointContract(
         device_id=device_id,
         point_key=key,
@@ -184,6 +443,7 @@ def _parse_point(raw: Any, device_id: str, location: str) -> PointContract:
         range_max=range_max,
         enum=enum,
         description=description,
+        mode_state=mode_state,
     )
 
 

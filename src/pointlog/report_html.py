@@ -73,6 +73,92 @@ def _severity(value: str) -> str:
     return f'<span class="{css}">{_e(value)}</span>'
 
 
+def _mode_state_section(summary: dict[str, Any]) -> str:
+    reviews = summary.get("mode_state_review") or []
+    if not reviews:
+        return ""
+    blocks = []
+    for review in reviews:
+        counts = review["summary"]
+        reset = review["reset_state"]
+        segment_rows = []
+        for segment in review["segments"]:
+            if segment["kind"] == "confirmed":
+                segment_rows.append([
+                    f"<code>确证</code>", _e(segment["start_ts"]), _e(segment["end_ts"]),
+                    f"<code>{_e(segment['state']['raw_value'])} / "
+                    f"{_e(segment['state']['label'] or '-')}</code>",
+                    _e(f"{segment['start_line']}–{segment['end_line']}"),
+                    _e("-"), _severity(str(segment["evidence_grade"])),
+                    _e(segment["detail"]),
+                ])
+            else:
+                segment_rows.append([
+                    f"<code>未知</code>", _e(segment["start_ts"]), _e(segment["end_ts"]),
+                    _e("-"),
+                    _e(",".join(str(number) for number in segment["line_numbers"]) or
+                       "-"),
+                    _e(",".join(segment["reasons"])),
+                    _severity(str(segment["evidence_grade"])),
+                    _e(segment["detail"]),
+                ])
+        pair_rows = []
+        for pair in review["transitions"]:
+            path = pair["assumed_path"]
+            path_text = "→".join(str(state) for state in path) if path else "-"
+            windows = "; ".join(
+                f"{window['state']}@{window['earliest_ts']}~{window['latest_ts']}"
+                for window in pair["plausible_windows"]
+            ) or "-"
+            pair_rows.append([
+                _e(pair["from_ts"]), _e(pair["to_ts"]),
+                f"<code>{_e(pair['from_state']['raw_value'])}→"
+                f"{_e(pair['to_state']['raw_value'])}</code>",
+                _e(f"L{pair['from_line']}→L{pair['to_line']}"),
+                _e(pair["elapsed_seconds"]),
+                _e(pair["min_required_seconds"]
+                   if pair["min_required_seconds"] is not None else "-"),
+                _e(path_text), _e(windows), _e("是" if pair["via_reset"] else "否"),
+                _severity(str(pair["grade"])), f"<code>{_e(pair['verdict'])}</code>",
+                _e(pair["recommendation"] or "-"),
+            ])
+        blocks.append(
+            f"<h3>{_e(review['device_id'])} / "
+            f"<code>{_e(review['point_key'])}</code></h3>"
+            "<div class=\"grid\">"
+            f"{_metric('直接合法', counts['direct'])}"
+            f"{_metric('未证成', counts['unproven'])}"
+            f"{_metric('明确不可能', counts['impossible'])}"
+            f"{_metric('未知段', counts['unknown_segments'])}"
+            f"{_metric('确证段', counts['confirmed_segments'])}"
+            "</div>"
+            f"<p>核验语义: <code>{_e(review['verification'])}</code>；"
+            f"最大未知间隔: {_e(review['max_gap_seconds'])}s；复位状态: "
+            + (f"<code>{_e(reset['raw_value'])} / {_e(reset['label'] or '-')}</code>"
+               if reset else "未声明")
+            + "</p>"
+            "<h4>逐段证据</h4>"
+            + _table(
+                ["段类型", "起始", "结束", "状态", "行号", "原因", "证据等级", "说明"],
+                segment_rows,
+            )
+            + "<h4>相邻确证观测的证据结论</h4>"
+            + _table(
+                ["起", "止", "状态跳转", "行号", "间隔(s)", "最短需求(s)",
+                 "最短假设路径", "中间状态可行窗口", "经复位", "证据等级", "结论", "建议"],
+                pair_rows,
+            )
+        )
+    return (
+        "<section><h2>枚举状态时序复核</h2>"
+        '<p class="note">状态结论只引用 CRC、解码、量程、枚举全部合格且时间戳可解析的'
+        "已完成批次读数；原始 reading 与 issue 不改动。未知段按时间区间合并，"
+        "不会把同一条缺口拆成多个故障。</p>"
+        + "".join(blocks)
+        + "</section>"
+    )
+
+
 def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
@@ -183,6 +269,7 @@ def render_html(summary: dict[str, Any]) -> str:
 {pending_note}
 {_table(['设备', '点位', '问题码', '质量码', '次数', '行号', '说明'], pending_rows)}
 </section>
+{_mode_state_section(summary)}
 
 <footer>
 本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。

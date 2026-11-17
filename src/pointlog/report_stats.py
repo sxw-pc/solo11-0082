@@ -11,6 +11,7 @@ from .store_queries import (
     batch_totals,
     device_stats,
     issue_distribution,
+    mode_state_rows,
     pending_recollect,
     point_stats,
     quality_distribution,
@@ -31,7 +32,8 @@ def collect_summary(
     pending = pending_recollect(store, batch_id)
     quality = quality_distribution(store, batch_id)
     issues = issue_distribution(store, batch_id)
-    return {
+    mode_states = mode_state_rows(store, batch_id, contract)
+    summary: dict[str, Any] = {
         "schema_version": 1,
         "batch": {
             "id": batch["id"],
@@ -58,3 +60,9 @@ def collect_summary(
         "points": point_stats(store, batch_id, contract),
         "pending_recollect": pending,
     }
+    # Only append the temporal section when a mode point actually declares an
+    # evidence contract. Old batches and mode-free contracts keep the original
+    # report shape byte-for-byte.
+    if mode_states:
+        summary["mode_state_review"] = mode_states
+    return summary

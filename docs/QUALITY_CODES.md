@@ -158,3 +158,17 @@ overflow 1, under_range 1, not_in_enum 1
 ## 7. 测试覆盖
 
 `tests/test_quality.py` 验证目录完整性、严重级别、待重采属性和优先级；`tests/test_ingest.py` 验证实际演示数据的质量分布；`tests/test_codec.py` 验证解码失败和非有限浮点；`tests/test_resume.py` 验证续采后质量与统计不重复。
+
+## 8. 证据等级（时序复核专用）
+
+枚举模式点的相邻确证观测另有独立的证据等级目录，**不属于**帧质量码，也不会写回读数：
+
+| 证据等级 | 含义 | 严重级别 |
+| --- | --- | --- |
+| `direct` | 直接声明的合法边（或同一状态） | info |
+| `unproven` | 存在可行路径但中间状态未观测，不能证明合法运行 | warning |
+| `impossible` | 状态图或最短停留时间无法满足观测间隔 | error |
+| `unknown` | 坏帧、异常、同时间戳冲突或超长缺口形成的未知段 | — |
+
+目录定义在 `pointlog.quality`（`EVIDENCE_ORDER`、`evidence_meta()`），时间线推导在
+`pointlog.mode_state`。详见 [CONTRACT.md §9](CONTRACT.md#9-枚举模式时序复核)。
