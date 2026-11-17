@@ -1,6 +1,6 @@
 """SQLite schema for the capture ledger."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -92,6 +92,25 @@ CREATE TABLE IF NOT EXISTS resume_state (
     FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE
 );
 
+-- Frozen robust baselines used by offline drift review.  A baseline is
+-- identified by its algorithm, sampling semantics, training batch and the
+-- training thresholds.  The payload is canonical JSON so reruns are stable.
+CREATE TABLE IF NOT EXISTS drift_baselines (
+    id TEXT PRIMARY KEY,
+    algorithm_version TEXT NOT NULL,
+    sampling TEXT NOT NULL CHECK (sampling IN ('global', 'hourly')),
+    training_batch_id TEXT NOT NULL,
+    training_replay_sha256 TEXT NOT NULL,
+    training_contract_sha256 TEXT NOT NULL,
+    contract_signature TEXT NOT NULL,
+    training_digest TEXT NOT NULL,
+    min_samples INTEGER NOT NULL,
+    max_gap_seconds REAL NOT NULL,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    FOREIGN KEY (training_batch_id) REFERENCES batches(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_frames_batch_quality
     ON frames(batch_id, quality_code);
 CREATE INDEX IF NOT EXISTS idx_readings_batch_point
@@ -102,4 +121,6 @@ CREATE INDEX IF NOT EXISTS idx_batches_fingerprint
     ON batches(replay_sha256, contract_sha256);
 CREATE INDEX IF NOT EXISTS idx_resume_path
     ON resume_state(replay_path, updated_at);
+CREATE INDEX IF NOT EXISTS idx_drift_baseline_training
+    ON drift_baselines(training_batch_id, sampling, algorithm_version);
 """

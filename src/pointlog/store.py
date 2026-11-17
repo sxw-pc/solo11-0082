@@ -31,7 +31,8 @@ class Store:
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
-            "INSERT OR IGNORE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+            "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (str(SCHEMA_VERSION),),
         )
         self.conn.commit()

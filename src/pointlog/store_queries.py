@@ -85,7 +85,19 @@ def device_stats(store: Store, batch_id: str, contract: ContractSet) -> list[dic
     return result
 
 
-def point_stats(store: Store, batch_id: str, contract: ContractSet) -> list[dict[str, Any]]:
+def point_stats(
+    store: Store,
+    batch_id: str,
+    contract: ContractSet,
+    drift: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-point static counts, optionally annotated with drift-review results.
+
+    ``drift`` is a report produced by :func:`pointlog.drift.detect_drift`.  It
+    is kept separate from the reading counts: a point can be ``good`` on every
+    line and still be flagged for a sustained shift against the frozen
+    reference, and an isolated spike is reported as no drift at all.
+    """
     reading_rows = {
         (row["device_id"], row["point_key"]): dict(row)
         for row in store.conn.execute(
@@ -104,11 +116,17 @@ def point_stats(store: Store, batch_id: str, contract: ContractSet) -> list[dict
             (batch_id,),
         )
     }
+    drift_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    if drift is not None:
+        drift_rows = {
+            (item["device_id"], item["point_key"]): item for item in drift["points"]
+        }
     result = []
     for point in sorted(contract.points, key=lambda item: (item.device_id, item.point_key)):
         key = (point.device_id, point.point_key)
         readings = reading_rows.get(key, {})
         issues = issue_rows.get(key, {})
+        review = drift_rows.get(key)
         result.append({
             "device_id": point.device_id,
             "point_key": point.point_key,
@@ -118,8 +136,32 @@ def point_stats(store: Store, batch_id: str, contract: ContractSet) -> list[dict
             "good_count": int(readings.get("good_count") or 0),
             "issue_count": int(issues.get("issue_count") or 0),
             "pending": bool(issues.get("pending_count") or 0),
+            "drift_status": review["status"] if review else "not_reviewed",
+            "drift_events": len(review["drifts"]) if review else 0,
+            "drift_insufficient": bool(review["insufficient"]) if review else False,
+            "drift_reference_layers": review["layers_used"] if review else [],
         })
     return result
+
+
+def baseline_rows(store: Store, limit: int = 100) -> list[dict[str, Any]]:
+    rows = store.conn.execute(
+        "SELECT id, algorithm_version, sampling, training_batch_id, "
+        "training_replay_sha256, training_contract_sha256, training_digest, "
+        "min_samples, max_gap_seconds, created_at FROM drift_baselines "
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def drift_batches(store: Store) -> list[dict[str, Any]]:
+    """Completed batches that can serve as a frozen training source."""
+    rows = store.conn.execute(
+        "SELECT * FROM batches WHERE status = 'completed' "
+        "ORDER BY started_at, id"
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def pending_recollect(store: Store, batch_id: str) -> list[dict[str, Any]]:

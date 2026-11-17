@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from .drift import INSUFFICIENT_EVIDENCE_CODES
 from .quality import quality_meta
 
 CSS = """
@@ -73,10 +74,103 @@ def _severity(value: str) -> str:
     return f'<span class="{css}">{_e(value)}</span>'
 
 
+def _status(value: str) -> str:
+    css = {
+        "drift": "sev-warning",
+        "insufficient": "sev-info",
+        "stable": "sev-info",
+    }.get(value, "sev-info")
+    return f'<span class="{css}">{_e(value)}</span>'
+
+
+def _render_drift_html(drift: dict[str, Any]) -> str:
+    baseline = drift["baseline"]
+    summary = drift["summary"]
+    params = drift["params"]
+    sampling = "UTC 小时分层" if drift["sampling"] == "hourly" else "全时段单一"
+    info_rows = [
+        ["训练批次", f"<code>{_e(baseline['training_batch']['id'])}</code>"],
+        ["训练回放 SHA-256", f"<code>{_e(baseline['training_batch']['replay_sha256'])}</code>"],
+        ["训练契约 SHA-256", f"<code>{_e(baseline['training_batch']['contract_sha256'])}</code>"],
+        ["参考基线 ID", f"<code>{_e(baseline['id'])}</code>"],
+        ["采样语义", _e(sampling)],
+        ["算法版本", _e(drift["algorithm_version"])],
+        ["训练样本范围",
+         _e(f"{baseline['reference_start'] or '-'} ~ {baseline['reference_end'] or '-'}")],
+        ["检测批次", f"<code>{_e(drift['detection_batch']['id'])}</code>"],
+        ["漂移门槛",
+         _e(f"{params['threshold']} × MAD（稳健尺度 MAD×{params['mad_scale']}），"
+            f"连续 {params['consecutive']} 个有效采样")],
+    ]
+    metric_html = "".join([
+        _metric("复核点位", summary["points_total"]),
+        _metric("漂移点位", summary["drift_points"]),
+        _metric("稳定点位", summary["stable_points"]),
+        _metric("不足以判断", summary["insufficient_points"]),
+        _metric("漂移事件", summary["drift_events"]),
+    ])
+    event_rows = []
+    for point in drift["points"]:
+        for event in point["drifts"]:
+            event_rows.append([
+                f"<code>{_e(point['device_id'])}</code>",
+                f"<code>{_e(point['point_key'])}</code>",
+                _e(event["reference"]),
+                _e(event["direction"]),
+                _e(event["start"]["ts"]),
+                _e(event["detected_at"]["ts"]),
+                _e(event["magnitude"]),
+                _e(",".join(str(number) for number in event["line_numbers"])),
+            ])
+    coverage_rows = []
+    for point in drift["points"]:
+        reasons = ", ".join(
+            item["code"] for item in point["evidence"]
+            if item["code"] in INSUFFICIENT_EVIDENCE_CODES
+        ) or "-"
+        coverage_rows.append([
+            f"<code>{_e(point['device_id'])}</code>",
+            f"<code>{_e(point['point_key'])}</code>",
+            _e(point["reference"]),
+            _e(", ".join(point["layers_used"]) or "-"),
+            _status(point["status"]),
+            _e(point["sample_count"]),
+            _e(point["invalid_sample_count"]),
+            _e(reasons),
+        ])
+    if event_rows:
+        event_note = (
+            '<p class="note">以下持续漂移仅是统计异常，须结合现场核查，'
+            "不构成设备故障结论。</p>"
+        )
+    else:
+        event_note = (
+            '<p class="note">没有满足连续同向偏移条件的漂移事件；'
+            "孤立尖峰不计为漂移。</p>"
+        )
+    return f"""
+<section>
+<h2>稳健漂移复核</h2>
+<p class="note">统计异常只表示读数与冻结参考分布不一致，不是设备故障事实；
+原始读数与质量码未被修改。</p>
+<table><tbody>
+{''.join(f'<tr><th>{_e(label)}</th><td>{value}</td></tr>' for label, value in info_rows)}
+</tbody></table>
+<div class="grid">{metric_html}</div>
+<h3>持续漂移事件</h3>
+{event_note}
+{_table(['设备', '点位', '参考层', '方向', '起点', '确认于', '幅度', '行号'], event_rows)}
+<h3>参考层与置信不足</h3>
+{_table(['设备', '点位', '采样语义', '实际参考层', '结论', '有效样本', '不可用样本',
+         '置信不足依据'], coverage_rows)}
+</section>"""
+
+
 def render_html(summary: dict[str, Any]) -> str:
     batch = summary["batch"]
     totals = summary["totals"]
     quality = summary["quality_code_distribution"]
+    drift = summary.get("drift")
     quality_rows = []
     for code, count in quality.items():
         meta = quality_meta(code)
@@ -118,6 +212,7 @@ def render_html(summary: dict[str, Any]) -> str:
         if pending_rows
         else '<p class="note">本次采集没有待重采点位。</p>'
     )
+    drift_section = _render_drift_html(drift) if drift is not None else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -183,7 +278,7 @@ def render_html(summary: dict[str, Any]) -> str:
 {pending_note}
 {_table(['设备', '点位', '问题码', '质量码', '次数', '行号', '说明'], pending_rows)}
 </section>
-
+{drift_section}
 <footer>
 本报告由 pointlog 离线生成。页面样式全部内联，不加载外部脚本、字体或资源。
 所有帧、设备名、点位与时间戳均为合成 fixture。

@@ -182,6 +182,10 @@ python -m pointlog run --replay PATH --contract PATH [--db PATH] [--reports DIR]
 python -m pointlog fixtures [--contract PATH] [--output PATH]
 python -m pointlog batches [--db PATH] [--limit N]
 python -m pointlog show BATCH_ID [--db PATH]
+python -m pointlog drift baseline --batch BATCH_ID [--sampling global|hourly] [--min-samples N] [--max-gap-seconds S] [--contract PATH] [--format text|json] [--db PATH]
+python -m pointlog drift detect --baseline ID --batch BATCH_ID [--threshold K] [--consecutive N] [--reports DIR] [--contract PATH] [--format text|json] [--db PATH]
+python -m pointlog drift baselines [--limit N] [--db PATH]
+python -m pointlog drift batches [--db PATH]
 python -m pointlog serve [--db PATH] [--port 5000]
 ```
 
@@ -195,7 +199,7 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `--stop-after` | 调试用，处理 N 行后模拟中断，便于验证续采 |
 | `--no-report` | 仅入库，不写报告 |
 
-退出码：契约错误 `2`，续采拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
+退出码：契约错误 `2`，续采/漂移拒绝 `3`，采集/输入错误 `1`/`2`，模拟中断 `130`。
 
 ## SQLite 台账
 
@@ -206,6 +210,7 @@ python -m pointlog serve [--db PATH] [--port 5000]
 | `readings` | 解码后的点位读数 | 设备、点位、时间戳、原始值、工程值、单位、质量码 |
 | `issues` | 问题明细与待重采标记 | 批次、行号、点位、问题码、帧摘要、说明、`pending_collect` |
 | `resume_state` | 续采状态 | 回放路径 + sha256、批次、已处理行偏移、总行数 |
+| `drift_baselines` | 冻结稳健参考基线 | 算法版本、采样语义、训练批次/回放/契约 sha256、训练摘要、参数、JSON 载荷 |
 | `schema_meta` | schema 版本 | `schema_version` |
 
 幂等策略：批次 ID 由回放 sha256 与契约 sha256 确定性生成；同一输入重跑会复用已完成批次，不新增帧或读数；读数在批次内以 `(batch_id, device_id, point_key, ts)` 唯一约束兜底。同批次重复行记为 `duplicate` 问题，不插入第二条读数。
@@ -222,6 +227,70 @@ python -m pointlog serve [--db PATH] [--port 5000]
 - `reports/pending_recollect.csv`：按设备/点位/问题码聚合的待重采清单。
 
 同一输入重复运行时，除首次批次时间外报告内容稳定；golden 测试覆盖 JSON 字段顺序、Markdown 关键片段、HTML 无外部资源和 CSV 结构。仓库中的 `reports/` 是一次演示采集的样例输出。
+
+## 离线漂移复核
+
+静态质量码只能回答“这一帧是否在量程/枚举内”。当点位**长期缓慢偏移**时，读数可能始终在
+`contract.range` 内、每帧质量码仍是 `good`，孤立尖峰与持续偏移也无法区分。`pointlog
+drift` 在**不修改原始 reading / quality_code** 的前提下，用冻结的稳健参考基线复核新批次：
+
+```bash
+# 1. 列出可作训练来源的已完成批次
+python -m pointlog drift batches --db var/pointlog.db
+
+# 2. 从明确指定的历史批次冻结基线（全时段单一参考）
+python -m pointlog drift baseline --batch BATCH_ID --db var/pointlog.db \
+    --sampling global --min-samples 5 --max-gap-seconds 21600
+
+# 3. 用同一样本冻结 UTC 小时分层基线
+python -m pointlog drift baseline --batch BATCH_ID --db var/pointlog.db \
+    --sampling hourly
+
+# 4. 用冻结基线复核新批次，并输出含漂移章节的报告
+python -m pointlog drift detect --baseline bl_xxx --batch NEW_BATCH_ID \
+    --db var/pointlog.db --threshold 3 --consecutive 3 --reports reports/
+```
+
+### 训练与冻结
+
+- 训练只取**一个显式指定且 `completed`** 的批次；检测批次绝不参与训练。
+- 只使用 `quality_code = 'good'`、时间戳为带时区的合法时间且数值有限的读数。
+  不可用样本（坏质量码、无时区/非法时间戳、非有限值、单位不符）被**排除并计数**，
+  不会当成 0 或正常值。
+- 每点位按设备/点位计算**中位数**、**MAD**、稳健尺度（`1.4826 × MAD`）和参考样本
+  时间范围。
+- 基线保存训练回放 SHA-256、契约 SHA-256、契约校准签名（unit/scale/offset/
+  data_type/byte_order）、算法版本与训练内容摘要。复用前会重新校验：训练记录被改动、
+  契约单位或校准变化、训练批次不再是 `completed`，都会以 `training_input_changed` /
+  `contract_changed` 拒绝沿用。
+
+### 采样语义
+
+| 语义 | 行为 |
+| --- | --- |
+| `global` | 每个点位全时段单一参考；对跨小时整体上移敏感，但也会把“白天本来就高”误判为漂移。 |
+| `hourly` | 每个用到的 UTC 小时各有独立中位数/MAD/最低样本数；某小时样本不足时该小时判“不足以判断”，**绝不静默退回全局层**。 |
+
+同一冻结训练集、同一检测值，两条路线可以给出不同结论。合成验收数据中 12:00 训练值约
+30、其余小时约 20，各层有 ±1 抖动（MAD 非零）；新批次 12:00 连续三次读到 30 且都在量程
+内——`global` 报持续上移，`hourly` 判与该小时正常分布一致。
+
+### 检测与输出
+
+- 用**冻结基线的 MAD** 和可配置门槛（默认 `3 × MAD`）判定偏离；报告同时给出
+  sigma 等价的稳健尺度 `1.4826 × MAD`。连续 **3** 个有效、同向、同一参考层的采样才算
+  持续漂移。
+- **孤立尖峰**不触发；正常样本、坏 CRC、缺帧/缺应答、长间隔（超过
+  `max_gap_seconds`）或参考层不可用都会**截断连续段**。
+- 每个漂移事件输出起点、方向、幅度（相对中位数的偏差）、源行号和基线摘要。
+- 样本不足、`MAD = 0` 但训练数据并不恒定、训练或检测存在长缺口时，点位判为
+  **不足以判断**，并在 `evidence` 中列出依据；这类结论不会显示成“稳定”。
+- 结果只由已存行与冻结基线确定性推导，重复运行或断点续采后报告字节稳定。
+- 报告 JSON 增加 `drift` 字段与点位的 `drift_status`/`drift_reference_layers`；
+  Markdown/HTML 增加“稳健漂移复核”章节，展示所用参考层、事件与置信不足处；
+  `drift_review.csv` 逐点导出结论。
+
+本功能只报告**统计异常**，不修改读数、不改变质量码，也不把统计异常当成设备故障事实。
 
 ## 只读复核台
 
@@ -242,7 +311,7 @@ python -m pointlog serve --port 5000
 python -m pytest -q
 ```
 
-覆盖 CRC 已知向量与错误向量、帧结构问题、全部数据类型/字节序、缩放与量程、质量码优先级、契约校验、幂等重跑、模拟中断续采、指纹变化拒绝续采、报告 golden 片段、只读服务路由与只读性。
+覆盖 CRC 已知向量与错误向量、帧结构问题、全部数据类型/字节序、缩放与量程、质量码优先级、契约校验、幂等重跑、模拟中断续采、指纹变化拒绝续采、报告 golden 片段、只读服务路由与只读性，以及漂移复核的两种基线、尖峰/持续段、`MAD=0`、坏样本断段、缺小时、训练污染、合同变更、输入乱序和续跑一致性。
 
 ## 目录结构
 

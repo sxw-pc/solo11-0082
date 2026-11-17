@@ -22,7 +22,10 @@ class ReportError(RuntimeError):
 
 
 def collect_summary(
-    store: Store, batch_id: str, contract: ContractSet
+    store: Store,
+    batch_id: str,
+    contract: ContractSet,
+    drift: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     batch = store.get_batch(batch_id)
     if batch is None:
@@ -31,7 +34,7 @@ def collect_summary(
     pending = pending_recollect(store, batch_id)
     quality = quality_distribution(store, batch_id)
     issues = issue_distribution(store, batch_id)
-    return {
+    summary = {
         "schema_version": 1,
         "batch": {
             "id": batch["id"],
@@ -55,6 +58,9 @@ def collect_summary(
         "quality_code_distribution": quality,
         "issue_distribution": issues,
         "devices": device_stats(store, batch_id, contract),
-        "points": point_stats(store, batch_id, contract),
+        "points": point_stats(store, batch_id, contract, drift=drift),
         "pending_recollect": pending,
     }
+    if drift is not None:
+        summary["drift"] = drift
+    return summary

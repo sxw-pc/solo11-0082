@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import ContractSet
+from .drift import INSUFFICIENT_EVIDENCE_CODES
 from .quality import quality_meta
 from .report_html import render_html
 from .report_stats import collect_summary
@@ -37,6 +38,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
     totals = summary["totals"]
     quality = summary["quality_code_distribution"]
     issues = summary["issue_distribution"]
+    drift = summary.get("drift")
     lines = [
         "# 点位采录台采集报告",
         "",
@@ -108,8 +110,92 @@ def render_markdown(summary: dict[str, Any]) -> str:
         ))
     else:
         lines.append("无待重采点位。")
+    if drift is not None:
+        lines += _render_drift_markdown(drift)
     lines.append("")
     return "\n".join(lines)
+
+
+def _render_drift_markdown(drift: dict[str, Any]) -> list[str]:
+    baseline = drift["baseline"]
+    summary = drift["summary"]
+    sampling = "UTC 小时分层" if drift["sampling"] == "hourly" else "全时段单一"
+    layer_label = (
+        "各 UTC 小时独立基线" if drift["sampling"] == "hourly"
+        else "全时段单一基线"
+    )
+    params = drift["params"]
+    lines = [
+        "",
+        "## 稳健漂移复核",
+        "",
+        "统计异常只表示读数与冻结参考分布不一致，不是设备故障事实；"
+        "原始读数与质量码未被修改。",
+        "",
+        _table(["字段", "值"], [
+            ["训练批次", baseline["training_batch"]["id"]],
+            ["训练回放 SHA-256", baseline["training_batch"]["replay_sha256"]],
+            ["训练契约 SHA-256", baseline["training_batch"]["contract_sha256"]],
+            ["参考基线 ID", baseline["id"]],
+            ["采样语义", f"{sampling}（{layer_label}）"],
+            ["算法版本", drift["algorithm_version"]],
+            ["训练样本范围", f"{baseline['reference_start'] or '-'} ~ "
+                           f"{baseline['reference_end'] or '-'}"],
+            ["检测批次", drift["detection_batch"]["id"]],
+            ["门槛", f"{params['threshold']} × MAD（稳健尺度 MAD×{params['mad_scale']}），"
+                     f"连续 {params['consecutive']} 个有效采样"],
+            ["最低训练样本数", params["min_samples"]],
+            ["最大允许间隔(秒)", params["max_gap_seconds"]],
+        ]),
+        "",
+        _table(["指标", "数量"], [
+            ["复核点位", summary["points_total"]],
+            ["漂移点位", summary["drift_points"]],
+            ["稳定点位", summary["stable_points"]],
+            ["不足以判断点位", summary["insufficient_points"]],
+            ["漂移事件", summary["drift_events"]],
+        ]),
+        "",
+    ]
+    events = []
+    for point in drift["points"]:
+        for event in point["drifts"]:
+            events.append([
+                point["device_id"], point["point_key"],
+                event["reference"], event["direction"],
+                event["start"]["ts"],
+                event["detected_at"]["ts"],
+                event["magnitude"],
+                ",".join(str(number) for number in event["line_numbers"]),
+            ])
+    lines.append("### 持续漂移事件")
+    lines.append("")
+    if events:
+        lines.append(_table(
+            ["设备", "点位", "参考层", "方向", "起点", "确认于", "幅度", "行号"],
+            events,
+        ))
+    else:
+        lines.append("没有满足连续同向偏移条件的漂移事件（孤立尖峰不计为漂移）。")
+    lines += ["", "### 参考层与置信不足", ""]
+    rows = []
+    for point in drift["points"]:
+        layers = ", ".join(point["layers_used"]) or "-"
+        reasons = ", ".join(
+            item["code"] for item in point["evidence"]
+            if item["code"] in INSUFFICIENT_EVIDENCE_CODES
+        ) or "-"
+        rows.append([
+            point["device_id"], point["point_key"], point["reference"], layers,
+            point["status"], point["sample_count"], point["invalid_sample_count"],
+            reasons,
+        ])
+    lines.append(_table(
+        ["设备", "点位", "采样语义", "实际参考层", "结论", "有效样本",
+         "不可用样本", "置信不足依据"],
+        rows,
+    ))
+    return lines
 
 
 def render_pending_csv(summary: dict[str, Any]) -> str:
@@ -133,13 +219,47 @@ def render_pending_csv(summary: dict[str, Any]) -> str:
     return output.getvalue()
 
 
+def render_drift_csv(summary: dict[str, Any]) -> str:
+    drift = summary["drift"]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow([
+        "device_id", "point_key", "unit", "reference", "status",
+        "direction", "start_ts", "detected_ts", "magnitude",
+        "line_numbers", "insufficient_reasons",
+    ])
+    for point in drift["points"]:
+        reasons = ";".join(
+            item["code"] for item in point["evidence"]
+            if item["code"] in INSUFFICIENT_EVIDENCE_CODES
+        )
+        if point["drifts"]:
+            for event in point["drifts"]:
+                writer.writerow([
+                    point["device_id"], point["point_key"], point["unit"],
+                    event["reference"], point["status"], event["direction"],
+                    event["start"]["ts"], event["detected_at"]["ts"],
+                    event["magnitude"],
+                    ";".join(str(number) for number in event["line_numbers"]),
+                    reasons,
+                ])
+        else:
+            writer.writerow([
+                point["device_id"], point["point_key"], point["unit"],
+                point["reference"], point["status"], "", "", "", "", "", reasons,
+            ])
+    return output.getvalue()
+
+
 def write_reports(
     store: Store,
     batch_id: str,
     contract: ContractSet,
     reports_dir: str | Path,
+    *,
+    drift: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    summary = collect_summary(store, batch_id, contract)
+    summary = collect_summary(store, batch_id, contract, drift=drift)
     target = Path(reports_dir)
     target.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -157,4 +277,8 @@ def write_reports(
             target / "pending_recollect.csv", render_pending_csv(summary)
         ),
     }
+    if drift is not None:
+        paths["drift_csv"] = str(atomic_write_text(
+            target / "drift_review.csv", render_drift_csv(summary)
+        ))
     return {key: str(path) for key, path in paths.items()}
